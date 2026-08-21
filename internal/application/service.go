@@ -567,6 +567,18 @@ func (s *Service) DeleteRound(ctx context.Context, roundID, actorID int64) (int6
 	return current.ApplicationID, nil
 }
 
+// Delete 删除一条面试流程。它的面试记录与操作日志通过外键
+// ON DELETE CASCADE 一并清除，不再单独记事件（日志随主行一起消失）。
+func (s *Service) Delete(ctx context.Context, id int64) error {
+	if _, err := s.repo.get(ctx, id); err != nil {
+		return err
+	}
+	if _, err := s.repo.db.ExecContext(ctx, `DELETE FROM applications WHERE id = ?`, id); err != nil {
+		return apperr.Internal(err)
+	}
+	return nil
+}
+
 // ---------- 校验与小工具 ----------
 
 // checkOwner 校验跟进人存在；nil 或 0 表示不指定。

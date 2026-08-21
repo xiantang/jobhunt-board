@@ -152,7 +152,10 @@
         </label>
       </div>
       <label>备注<textarea name="notes" rows="3" maxlength="2000"></textarea></label>
-      <button type="submit" class="btn btn--primary">保存</button>
+      <div class="drawer__actions">
+        <button type="submit" class="btn btn--primary">保存</button>
+        <button type="button" class="btn btn--danger" id="delete-application">删除这条流程</button>
+      </div>
     </form>
 
     <section class="drawer__rounds">

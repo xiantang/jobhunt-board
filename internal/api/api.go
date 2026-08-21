@@ -46,6 +46,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	r.PATCH("/applications/:id", h.UpdateApplication)
 	r.PATCH("/applications/:id/stage", h.MoveApplication)
 	r.POST("/applications/:id/rounds", h.ScheduleRound)
+	r.DELETE("/applications/:id", h.DeleteApplication)
 
 	r.PATCH("/rounds/:id", h.UpdateRound)
 	r.DELETE("/rounds/:id", h.DeleteRound)
@@ -438,6 +439,25 @@ func (h *Handler) MoveApplication(c *gin.Context) {
 		return
 	}
 	h.respondWithApplicationBoard(c, moved)
+}
+
+// DeleteApplication 删除一条面试流程，连带它的面试记录与操作日志。
+func (h *Handler) DeleteApplication(c *gin.Context) {
+	id, err := ginx.PathID(c, "id")
+	if err != nil {
+		ginx.Fail(c, err)
+		return
+	}
+	current, err := h.Applications.Get(c.Request.Context(), id)
+	if err != nil {
+		ginx.Fail(c, err)
+		return
+	}
+	if err := h.Applications.Delete(c.Request.Context(), id); err != nil {
+		ginx.Fail(c, err)
+		return
+	}
+	h.respondWithBoard(c, current.BoardKey, gin.H{"deleted": id}, false)
 }
 
 // ---------- 面试排期 ----------

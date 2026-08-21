@@ -329,6 +329,20 @@
     }
   });
 
+  document.getElementById('delete-application').addEventListener('click', async () => {
+    if (!currentAppId) return;
+    if (!confirm('确定删除这条流程？面试记录与操作日志会一并删除，且无法恢复。')) return;
+    try {
+      const data = await API.del(`/api/applications/${currentAppId}${query}`);
+      renderBoard(data.board);
+      drawer.hidden = true;
+      currentAppId = null;
+      API.toast('流程已删除', true);
+    } catch (err) {
+      API.toast(err.message);
+    }
+  });
+
   // ---------- 面试排期 ----------
 
   const options = (pairs, current) => pairs

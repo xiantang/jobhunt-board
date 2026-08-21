@@ -140,6 +140,21 @@ func TestFullFlow(t *testing.T) {
 	if got := columns(t, body["board"])["已发 Offer"]; got != 1 {
 		t.Fatalf("Offer 列卡片数 = %d，期望 1", got)
 	}
+
+	// 删除这条流程：卡片从看板上消失，面试记录与日志随之清掉。
+	code, body = do(t, r, http.MethodDelete, "/api/applications/"+strconv.Itoa(id), nil)
+	if code != http.StatusOK {
+		t.Fatalf("删除返回 %d：%v", code, body)
+	}
+	if got := int(body["deleted"].(float64)); got != id {
+		t.Fatalf("deleted = %d，期望 %d", got, id)
+	}
+	if got := columns(t, body["board"])["已发 Offer"]; got != 0 {
+		t.Fatalf("删除后 Offer 列卡片数 = %d，期望 0", got)
+	}
+	if code, _ = do(t, r, http.MethodGet, "/api/applications/"+strconv.Itoa(id), nil); code != http.StatusNotFound {
+		t.Fatalf("删除后再查状态码 = %d，期望 404", code)
+	}
 }
 
 func TestInvalidTransitionReturns409(t *testing.T) {
@@ -245,6 +260,12 @@ func TestValidationAndNotFound(t *testing.T) {
 	}
 	if code, _ := do(t, r, http.MethodGet, "/api/applications/9999", nil); code != http.StatusNotFound {
 		t.Fatalf("不存在的流程状态码 = %d，期望 404", code)
+	}
+	if code, _ := do(t, r, http.MethodDelete, "/api/applications/9999", nil); code != http.StatusNotFound {
+		t.Fatalf("删除不存在的流程状态码 = %d，期望 404", code)
+	}
+	if code, _ := do(t, r, http.MethodDelete, "/api/applications/abc", nil); code != http.StatusBadRequest {
+		t.Fatalf("非法 ID 状态码 = %d，期望 400", code)
 	}
 	if code, _ := do(t, r, http.MethodGet, "/api/boards/NOPE/board", nil); code != http.StatusNotFound {
 		t.Fatalf("不存在的看板状态码 = %d，期望 404", code)

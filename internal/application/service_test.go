@@ -238,6 +238,42 @@ func TestScheduleAndUpdateRound(t *testing.T) {
 	}
 }
 
+func TestDeleteCascadesRoundsAndEvents(t *testing.T) {
+	svc, boardID, _ := setup(t)
+	ctx := context.Background()
+	app := mustCreate(t, svc, boardID, CreateInput{Company: "某公司"})
+
+	if _, err := svc.ScheduleRound(ctx, app.ID, RoundInput{}, 0); err != nil {
+		t.Fatalf("安排面试失败: %v", err)
+	}
+
+	if err := svc.Delete(ctx, app.ID); err != nil {
+		t.Fatalf("删除流程失败: %v", err)
+	}
+	if _, err := svc.Get(ctx, app.ID); codeOf(t, err) != apperr.CodeNotFound {
+		t.Fatalf("删除后再查应当返回 NOT_FOUND，实际 %v", err)
+	}
+
+	// 面试记录与操作日志靠外键级联清除；这里直接查库，顺带验证 foreign_keys pragma 确实开着。
+	for _, table := range []string{"interview_rounds", "application_events"} {
+		var n int
+		if err := svc.repo.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+table+` WHERE application_id = ?`, app.ID).Scan(&n); err != nil {
+			t.Fatalf("统计 %s 失败: %v", table, err)
+		}
+		if n != 0 {
+			t.Fatalf("%s 还剩 %d 行，级联删除没生效", table, n)
+		}
+	}
+}
+
+func TestDeleteMissing(t *testing.T) {
+	svc, _, _ := setup(t)
+	if err := svc.Delete(context.Background(), 999999); codeOf(t, err) != apperr.CodeNotFound {
+		t.Fatalf("删除不存在的流程应当返回 NOT_FOUND，实际 %v", err)
+	}
+}
+
 func TestUpdateNoChangeSkipsLog(t *testing.T) {
 	svc, boardID, _ := setup(t)
 	ctx := context.Background()
