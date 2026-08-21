@@ -157,6 +157,34 @@ func TestFullFlow(t *testing.T) {
 	}
 }
 
+func TestDuplicateApplicationReturns409(t *testing.T) {
+	r := setup(t)
+
+	body := map[string]any{"company": "某大厂", "role": "后端研发", "owner_id": 1}
+	if code, got := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications", body); code != http.StatusCreated {
+		t.Fatalf("首次创建返回 %d：%v", code, got)
+	}
+
+	code, got := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications", body)
+	if code != http.StatusConflict || errCode(t, got) != "CONFLICT" {
+		t.Fatalf("重复投递状态码 = %d，body = %v", code, got)
+	}
+
+	// 同公司换个岗位仍然可以建。
+	code, got = do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "某大厂", "role": "前端研发", "owner_id": 1})
+	if code != http.StatusCreated {
+		t.Fatalf("同公司不同岗位返回 %d：%v", code, got)
+	}
+	id := strconv.Itoa(int(got["application"].(map[string]any)["id"].(float64)))
+
+	// 把它的岗位改成已存在的那个，要被拦住。
+	code, got = do(t, r, http.MethodPatch, "/api/applications/"+id, map[string]any{"role": "后端研发"})
+	if code != http.StatusConflict || errCode(t, got) != "CONFLICT" {
+		t.Fatalf("改岗位撞车状态码 = %d，body = %v", code, got)
+	}
+}
+
 func TestInvalidTransitionReturns409(t *testing.T) {
 	r := setup(t)
 	// 种子数据里 JOBHUNT-2 停在「在线测评」，直接跳三面属于跨阶段。

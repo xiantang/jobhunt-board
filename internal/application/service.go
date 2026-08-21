@@ -140,6 +140,9 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput, act
 	} else if !ok {
 		return Application{}, apperr.NotFound("看板不存在")
 	}
+	if err := s.checkDuplicate(ctx, boardID, company, role, 0); err != nil {
+		return Application{}, err
+	}
 	if err := s.checkOwner(ctx, in.OwnerID); err != nil {
 		return Application{}, err
 	}
@@ -220,6 +223,8 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput, actorID 
 	args := make([]any, 0, 7)
 	logs := make([]string, 0, 6) // 每条一句人话，落到操作日志
 
+	company, role := current.Company, current.Role // 校验重复时用改完之后的值
+
 	text := []struct {
 		column, field, label string
 		in                   *string
@@ -243,10 +248,22 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput, actorID 
 		} else if value, err = normalizeText(f.field, *f.in, f.max); err != nil {
 			return Application{}, err
 		}
+		switch f.column {
+		case "company":
+			company = value
+		case "role":
+			role = value
+		}
 		if value != f.current {
 			sets = append(sets, f.column+" = ?")
 			args = append(args, value)
 			logs = append(logs, "更新了"+f.label)
+		}
+	}
+	// 改名可能撞上另一张卡片，和新建走同一条规则。
+	if company != current.Company || role != current.Role {
+		if err := s.checkDuplicate(ctx, current.BoardID, company, role, id); err != nil {
+			return Application{}, err
 		}
 	}
 
@@ -580,6 +597,24 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 }
 
 // ---------- 校验与小工具 ----------
+
+// checkDuplicate 保证同一看板里「公司 + 岗位」只出现一张卡片，
+// 免得同一家公司散成多张卡各自流转，看不出真实进度。
+// 只拦新增与改名，存量重复数据保持原样。
+func (s *Service) checkDuplicate(ctx context.Context, boardID int64, company, role string, excludeID int64) error {
+	key, found, err := s.repo.findDuplicate(ctx, boardID, company, role, excludeID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	what := "「" + company + "」"
+	if role != "" {
+		what += "的「" + role + "」"
+	}
+	return apperr.Conflict(apperr.CodeConflict, what+"已经有一张卡片了（"+key+"），请直接用那张")
+}
 
 // checkOwner 校验跟进人存在；nil 或 0 表示不指定。
 func (s *Service) checkOwner(ctx context.Context, id *int64) error {

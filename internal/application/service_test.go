@@ -238,6 +238,41 @@ func TestScheduleAndUpdateRound(t *testing.T) {
 	}
 }
 
+func TestDuplicateCompanyAndRole(t *testing.T) {
+	svc, boardID, _ := setup(t)
+	ctx := context.Background()
+	mustCreate(t, svc, boardID, CreateInput{Company: "某公司", Role: "后端研发"})
+
+	// 公司 + 岗位都一样 → 409。
+	_, err := svc.Create(ctx, boardID, CreateInput{Company: "某公司", Role: "后端研发"}, 0)
+	if codeOf(t, err) != apperr.CodeConflict {
+		t.Fatalf("重复投递应当返回 CONFLICT，实际 %v", err)
+	}
+	// 大小写与首尾空格不算新公司。
+	_, err = svc.Create(ctx, boardID, CreateInput{Company: "  某公司 ", Role: "后端研发"}, 0)
+	if codeOf(t, err) != apperr.CodeConflict {
+		t.Fatalf("去空格后重复应当返回 CONFLICT，实际 %v", err)
+	}
+	// 同公司不同岗位允许。
+	other := mustCreate(t, svc, boardID, CreateInput{Company: "某公司", Role: "前端研发"})
+
+	// 改名撞车同样被拦。
+	role := "后端研发"
+	if _, err := svc.Update(ctx, other.ID, UpdateInput{Role: &role}, 0); codeOf(t, err) != apperr.CodeConflict {
+		t.Fatalf("改岗位撞车应当返回 CONFLICT，实际 %v", err)
+	}
+	// 改成别的岗位没问题，也不会把自己判成重复。
+	free := "测试开发"
+	if _, err := svc.Update(ctx, other.ID, UpdateInput{Role: &free}, 0); err != nil {
+		t.Fatalf("改成空闲岗位失败: %v", err)
+	}
+	// 不碰公司 / 岗位的更新不受影响。
+	notes := "面完补充"
+	if _, err := svc.Update(ctx, other.ID, UpdateInput{Notes: &notes}, 0); err != nil {
+		t.Fatalf("只改备注失败: %v", err)
+	}
+}
+
 func TestDeleteCascadesRoundsAndEvents(t *testing.T) {
 	svc, boardID, _ := setup(t)
 	ctx := context.Background()

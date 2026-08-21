@@ -149,6 +149,30 @@ func (r *repo) get(ctx context.Context, id int64) (Application, error) {
 	return a, nil
 }
 
+// findDuplicate 查同一看板里公司 + 岗位都相同的另一张卡片，返回它的卡片编号。
+// excludeID 用来在改名时排除自己。用 NOCASE 比较，免得
+// 「ByteDance」和「bytedance」被当成两家公司各占一张卡。
+func (r *repo) findDuplicate(ctx context.Context, boardID int64, company, role string, excludeID int64) (string, bool, error) {
+	var (
+		boardKey string
+		seq      int
+	)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT b.key, a.seq FROM applications a
+		JOIN boards b ON b.id = a.board_id
+		WHERE a.board_id = ? AND a.id <> ?
+		  AND a.company = ? COLLATE NOCASE
+		  AND a.role = ? COLLATE NOCASE
+		ORDER BY a.id LIMIT 1`, boardID, excludeID, company, role).Scan(&boardKey, &seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, apperr.Internal(err)
+	}
+	return fmt.Sprintf("%s-%d", boardKey, seq), true, nil
+}
+
 // nextSeq 返回看板内下一个流程编号。
 func (r *repo) nextSeq(ctx context.Context, tx *sql.Tx, boardID int64) (int, error) {
 	var seq sql.NullInt64
