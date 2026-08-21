@@ -15,7 +15,7 @@ import (
 type Kind string
 
 const (
-	KindNormal    Kind = "normal"           // 普通阶段，如 HR 初筛、在线测评、Offer 审批中
+	KindNormal    Kind = "normal"           // 普通阶段，如 HR screen、在线测评、Offer 审批中
 	KindInterview Kind = "interview"        // 面试阶段，移入时自动建一条待安排的面试轮次
 	KindOffer     Kind = "terminal_success" // 终态：拿到 Offer
 	KindRejected  Kind = "terminal_fail"    // 终态：挂了 / 主动结束

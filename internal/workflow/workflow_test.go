@@ -10,7 +10,7 @@ import (
 // demoFlow 是测试用的一套阶段：两个普通阶段 + 一个要求跟进人的面试阶段 + 两个终态。
 func demoFlow() Flow {
 	return NewFlow([]Stage{
-		{Key: "hr_screen", Label: "HR 初筛", Kind: KindNormal},
+		{Key: "hr_screen", Label: "HR screen", Kind: KindNormal},
 		{Key: "online_test", Label: "在线测评", Kind: KindNormal},
 		{Key: "round_1", Label: "一面", Kind: KindInterview, RequiresOwner: true},
 		{Key: "offer", Label: "已发 Offer", Kind: KindOffer},

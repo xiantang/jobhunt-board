@@ -58,7 +58,7 @@ var defaultStages = []struct {
 	key, label, kind, color string
 	requiresOwner           bool
 }{
-	{"hr_screen", "HR 初筛", "normal", "#64748b", false},
+	{"hr_screen", "HR screen", "normal", "#64748b", false},
 	{"online_test", "在线测评", "normal", "#0891b2", false},
 	{"round_1", "一面", "interview", "#2563eb", true},
 	{"round_2", "二面", "interview", "#4f46e5", false},

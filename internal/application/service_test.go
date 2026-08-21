@@ -57,7 +57,7 @@ func seedStages(t *testing.T, db *sql.DB, boardID int64) {
 		key, label, kind string
 		requiresOwner    int
 	}{
-		{"hr_screen", "HR 初筛", string(workflow.KindNormal), 0},
+		{"hr_screen", "HR screen", string(workflow.KindNormal), 0},
 		{"online_test", "在线测评", string(workflow.KindNormal), 0},
 		{"round_1", "一面", string(workflow.KindInterview), 1},
 		{"offer", "已发 Offer", string(workflow.KindOffer), 0},
