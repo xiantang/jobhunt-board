@@ -1,0 +1,90 @@
+CREATE TABLE IF NOT EXISTS boards (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    key         TEXT    NOT NULL UNIQUE,
+    name        TEXT    NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS members (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    role       TEXT    NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'lead')),
+    color      TEXT    NOT NULL DEFAULT '#6b7280',
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT    NOT NULL
+);
+
+-- stages 是可自由配置的面试阶段，按看板隔离。
+-- key 是稳定标识（改名不动它），label 才是展示名。
+CREATE TABLE IF NOT EXISTS stages (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id       INTEGER NOT NULL REFERENCES boards (id) ON DELETE CASCADE,
+    key            TEXT    NOT NULL,
+    label          TEXT    NOT NULL,
+    kind           TEXT    NOT NULL DEFAULT 'normal'
+                   CHECK (kind IN ('normal', 'interview', 'terminal_success', 'terminal_fail')),
+    color          TEXT    NOT NULL DEFAULT '#6b7280',
+    requires_owner INTEGER NOT NULL DEFAULT 0,
+    position       REAL    NOT NULL,
+    created_at     TEXT    NOT NULL,
+    UNIQUE (board_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stages_board ON stages (board_id, position);
+
+-- applications 是一条投递 / 一条面试流程，卡片即此表一行。
+CREATE TABLE IF NOT EXISTS applications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id   INTEGER NOT NULL REFERENCES boards (id) ON DELETE CASCADE,
+    seq        INTEGER NOT NULL,
+    company    TEXT    NOT NULL,
+    role       TEXT    NOT NULL DEFAULT '',
+    channel    TEXT    NOT NULL DEFAULT '',
+    notes      TEXT    NOT NULL DEFAULT '',
+    stage_key  TEXT    NOT NULL,
+    intent     TEXT    NOT NULL DEFAULT 'normal' CHECK (intent IN ('low', 'normal', 'high')),
+    owner_id   INTEGER REFERENCES members (id) ON DELETE SET NULL,
+    position   REAL    NOT NULL DEFAULT 0,
+    created_at TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL,
+    UNIQUE (board_id, seq),
+    FOREIGN KEY (board_id, stage_key) REFERENCES stages (board_id, key) ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_board ON applications (board_id, stage_key, position);
+
+-- interview_rounds 是每一轮面试的独立记录：时间 + 会议方式。
+-- stage_label 存快照，阶段改名后历史仍然可读。
+CREATE TABLE IF NOT EXISTS interview_rounds (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+    stage_key      TEXT    NOT NULL,
+    stage_label    TEXT    NOT NULL,
+    scheduled_at   TEXT,
+    duration_min   INTEGER NOT NULL DEFAULT 60,
+    mode           TEXT    NOT NULL DEFAULT 'online' CHECK (mode IN ('online', 'onsite', 'phone')),
+    meeting_url    TEXT    NOT NULL DEFAULT '',
+    meeting_place  TEXT    NOT NULL DEFAULT '',
+    interviewer    TEXT    NOT NULL DEFAULT '',
+    result         TEXT    NOT NULL DEFAULT 'pending'
+                   CHECK (result IN ('pending', 'passed', 'failed', 'cancelled')),
+    notes          TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rounds_app ON interview_rounds (application_id, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS application_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+    actor_id       INTEGER REFERENCES members (id) ON DELETE SET NULL,
+    type           TEXT    NOT NULL,
+    from_stage     TEXT,
+    to_stage       TEXT,
+    detail         TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_events_app ON application_events (application_id, id);

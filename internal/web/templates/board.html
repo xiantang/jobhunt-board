@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN" data-board="{{ .View.Board.Key }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .View.Board.Key }} · {{ .View.Board.Name }}</title>
+  <link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__title">
+      <span class="board-key">{{ .View.Board.Key }}</span>
+      <h1>{{ .View.Board.Name }}</h1>
+      <p class="board-desc">{{ .View.Board.Description }}</p>
+    </div>
+
+    <div class="summary" id="summary">
+      <div class="summary__bar"><span style="width: {{ .View.Summary.Percent }}%"></span></div>
+      <div class="summary__text">
+        共 <b data-summary="total">{{ .View.Summary.Total }}</b> 条 ·
+        推进中 <b data-summary="active">{{ .View.Summary.Active }}</b> ·
+        Offer <b data-summary="offer">{{ .View.Summary.Offer }}</b> ·
+        已结束 <b data-summary="rejected">{{ .View.Summary.Rejected }}</b> ·
+        近 7 天面试 <b data-summary="upcoming">{{ .View.Summary.Upcoming }}</b>
+      </div>
+    </div>
+
+    <div class="whoami">
+      <label for="current-member">我是</label>
+      <select id="current-member">
+        {{ $current := .CurrentMemberID }}
+        {{ range .Members }}
+          <option value="{{ .ID }}" {{ if eq .ID $current }}selected{{ end }}>{{ .Name }}（{{ .RoleLabel }}）</option>
+        {{ end }}
+      </select>
+      <button type="button" class="btn btn--ghost" id="add-member">+ 成员</button>
+      <button type="button" class="btn btn--ghost" id="open-stages">⚙ 配置阶段</button>
+    </div>
+  </header>
+
+  {{ $fs := .FilterStage }}{{ $fo := .FilterOwner }}{{ $up := "" }}{{ if .FilterUpcoming }}{{ $up = "1" }}{{ end }}
+  <nav class="filters">
+    <div class="filters__group">
+      <span class="filters__label">跟进人</span>
+      <a class="chip {{ if eq $fo "all" }}chip--on{{ end }}" href="?stage={{ $fs }}&owner=all&upcoming={{ $up }}">全部</a>
+      {{ range .Members }}
+        <a class="chip {{ if eq $fo (printf "%d" .ID) }}chip--on{{ end }}" href="?stage={{ $fs }}&owner={{ .ID }}&upcoming={{ $up }}">{{ .Name }}</a>
+      {{ end }}
+      <a class="chip {{ if eq $fo "none" }}chip--on{{ end }}" href="?stage={{ $fs }}&owner=none&upcoming={{ $up }}">未指定</a>
+    </div>
+    <div class="filters__group">
+      <span class="filters__label">阶段</span>
+      <a class="chip {{ if eq $fs "all" }}chip--on{{ end }}" href="?stage=all&owner={{ $fo }}&upcoming={{ $up }}">全部</a>
+      {{ range .View.Columns }}
+        <a class="chip {{ if eq $fs .Key }}chip--on{{ end }}" href="?stage={{ .Key }}&owner={{ $fo }}&upcoming={{ $up }}">{{ .Label }}</a>
+      {{ end }}
+    </div>
+    <div class="filters__group">
+      <a class="chip {{ if .FilterUpcoming }}chip--on{{ end }}"
+         href="?stage={{ $fs }}&owner={{ $fo }}&upcoming={{ if .FilterUpcoming }}{{ else }}1{{ end }}">📅 只看已排期</a>
+    </div>
+  </nav>
+
+  <main class="board" id="board">
+    {{ range .View.Columns }}
+    <section class="column column--{{ .Kind }}" data-stage="{{ .Key }}" style="--stage-color: {{ .Color }}">
+      <header class="column__head">
+        <h2>{{ .Label }}</h2>
+        <span class="badge" data-count>{{ .Count }}</span>
+      </header>
+
+      <div class="column__body" data-dropzone>
+        {{ range .Applications }}
+        <article class="card intent-{{ .Intent }}{{ if .NeedsSchedule }} card--warn{{ end }}"
+                 draggable="true" data-app="{{ .ID }}" data-stage="{{ .StageKey }}">
+          <h3 class="card__title">{{ .Company }}</h3>
+          {{ if or .Role .Channel }}
+          <p class="card__sub">{{ .Role }}{{ if and .Role .Channel }} · {{ end }}{{ .Channel }}</p>
+          {{ end }}
+          {{ with .NextRound }}
+          <p class="card__round{{ if .Overdue }} card__round--overdue{{ end }}">
+            <span>📅 {{ .WhenText }}</span>
+            <span class="card__meeting">{{ .MeetingText }}</span>
+          </p>
+          {{ end }}
+          <div class="card__meta">
+            <span class="card__key">{{ .Key }}</span>
+            <span class="tag tag--{{ .Intent }}">意向{{ .IntentLabel }}</span>
+            {{ if gt .RoundCount 0 }}<span class="tag tag--rounds">{{ .RoundCount }} 轮</span>{{ end }}
+            {{ if .Owner }}
+              <span class="avatar" style="background: {{ .Owner.Color }}" title="{{ .Owner.Name }}">{{ .Owner.Initial }}</span>
+            {{ else }}
+              <span class="avatar avatar--empty" title="未指定跟进人">?</span>
+            {{ end }}
+          </div>
+          <div class="card__actions">
+            <select class="card__move" data-move aria-label="移动到其他阶段"></select>
+          </div>
+        </article>
+        {{ end }}
+      </div>
+
+      {{ if .IsEntry }}
+      <form class="create" id="create-form">
+        <input type="text" name="company" placeholder="+ 新增投递，输入公司名" maxlength="60" autocomplete="off">
+        <input type="text" name="role" placeholder="岗位（选填）" maxlength="60" autocomplete="off">
+        <div class="create__row">
+          <select name="owner_id">
+            <option value="0">未指定</option>
+            {{ range $.Members }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+          </select>
+          <select name="intent">
+            <option value="low">意向低</option>
+            <option value="normal" selected>意向中</option>
+            <option value="high">意向高</option>
+          </select>
+          <button type="submit" class="btn btn--primary">创建</button>
+        </div>
+      </form>
+      {{ end }}
+    </section>
+    {{ end }}
+  </main>
+
+  <!-- 流程详情抽屉 -->
+  <aside class="drawer" id="drawer" hidden>
+    <header class="drawer__head">
+      <span class="card__key" id="drawer-key"></span>
+      <span class="drawer__stage" id="drawer-stage"></span>
+      <button type="button" class="btn btn--ghost" data-close="drawer">关闭</button>
+    </header>
+
+    <form class="drawer__form" id="drawer-form">
+      <div class="drawer__row">
+        <label>公司<input type="text" name="company" maxlength="60"></label>
+        <label>岗位<input type="text" name="role" maxlength="60"></label>
+      </div>
+      <div class="drawer__row">
+        <label>投递渠道<input type="text" name="channel" maxlength="30" placeholder="内推 / 官网 / 猎头"></label>
+        <label>跟进人
+          <select name="owner_id">
+            <option value="0">未指定</option>
+            {{ range .Members }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+          </select>
+        </label>
+        <label>意向度
+          <select name="intent">
+            <option value="low">低</option>
+            <option value="normal">中</option>
+            <option value="high">高</option>
+          </select>
+        </label>
+      </div>
+      <label>备注<textarea name="notes" rows="3" maxlength="2000"></textarea></label>
+      <button type="submit" class="btn btn--primary">保存</button>
+    </form>
+
+    <section class="drawer__rounds">
+      <h4>面试记录<button type="button" class="btn btn--tiny" id="add-round">+ 安排面试</button></h4>
+      <div id="drawer-rounds"></div>
+    </section>
+
+    <section class="drawer__log">
+      <h4>操作日志</h4>
+      <ul id="drawer-events"></ul>
+    </section>
+  </aside>
+
+  <!-- 阶段配置抽屉 -->
+  <aside class="drawer drawer--stages" id="stage-drawer" hidden>
+    <header class="drawer__head">
+      <span class="card__key">阶段配置</span>
+      <button type="button" class="btn btn--ghost" data-close="stage-drawer">关闭</button>
+    </header>
+    <p class="drawer__hint">
+      列的顺序就是流转顺序：卡片只能前后各挪一格，但任何阶段都能直接跳到终态。
+      改名不会影响已有卡片，删除阶段前需要先把卡片移走。
+    </p>
+    <div id="stage-list"></div>
+    <form class="stage-new" id="stage-form">
+      <input type="text" name="label" placeholder="+ 新增阶段名称" maxlength="20" autocomplete="off" required>
+      <select name="kind">
+        {{ range .Kinds }}<option value="{{ .Value }}">{{ .Label }}</option>{{ end }}
+      </select>
+      <button type="submit" class="btn btn--primary">添加</button>
+    </form>
+  </aside>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script id="board-data" type="application/json">{{ jsonify .View }}</script>
+  <script id="kind-data" type="application/json">{{ jsonify .Kinds }}</script>
+  <script id="member-data" type="application/json">{{ jsonify .Members }}</script>
+  <script src="/static/api.js"></script>
+  <script src="/static/board.js"></script>
+</body>
+</html>
