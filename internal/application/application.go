@@ -69,9 +69,10 @@ func (a Application) IntentLabel() string {
 	}
 }
 
-// NeedsSchedule 表示卡片停在面试阶段，却还没排上时间——界面上给个提醒。
+// NeedsSchedule 表示卡片停在面试 / 任务阶段，却还没定时间——界面上给个提醒。
+// 对面试是「还没约上」，对在线测评是「还不知道什么时候截止」，都得催。
 func (a Application) NeedsSchedule() bool {
-	if a.StageKind != workflow.KindInterview {
+	if !a.StageKind.TracksRound() {
 		return false
 	}
 	return a.NextRound == nil || a.NextRound.ScheduledAt == nil
@@ -79,20 +80,22 @@ func (a Application) NeedsSchedule() bool {
 
 // Round 是一轮面试的记录：时间 + 会议方式 + 结果。
 type Round struct {
-	ID            int64      `json:"id"`
-	ApplicationID int64      `json:"application_id"`
-	StageKey      string     `json:"stage_key"`
-	StageLabel    string     `json:"stage_label"` // 快照，阶段改名后历史仍可读
-	ScheduledAt   *time.Time `json:"scheduled_at"`
-	DurationMin   int        `json:"duration_min"`
-	Mode          string     `json:"mode"`
-	MeetingURL    string     `json:"meeting_url"`
-	MeetingPlace  string     `json:"meeting_place"`
-	Interviewer   string     `json:"interviewer"`
-	Result        string     `json:"result"`
-	Notes         string     `json:"notes"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            int64  `json:"id"`
+	ApplicationID int64  `json:"application_id"`
+	StageKey      string `json:"stage_key"`
+	StageLabel    string `json:"stage_label"` // 快照，阶段改名后历史仍可读
+	// Kind 决定 ScheduledAt 的含义：面试是开始时间，任务（在线测评）是截止时间。
+	Kind         string     `json:"kind"`
+	ScheduledAt  *time.Time `json:"scheduled_at"`
+	DurationMin  int        `json:"duration_min"`
+	Mode         string     `json:"mode"`
+	MeetingURL   string     `json:"meeting_url"`
+	MeetingPlace string     `json:"meeting_place"`
+	Interviewer  string     `json:"interviewer"`
+	Result       string     `json:"result"`
+	Notes        string     `json:"notes"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // ScheduledRound 是一轮面试连同它所属流程的展示信息。
@@ -108,6 +111,7 @@ type ScheduledRound struct {
 	StageKey       string     `json:"stage_key"`
 	StageLabel     string     `json:"stage_label"`
 	StageColor     string     `json:"stage_color"`
+	Kind           string     `json:"kind"`
 	ScheduledAt    *time.Time `json:"scheduled_at"`
 	DurationMin    int        `json:"duration_min"`
 	Mode           string     `json:"mode"`
@@ -118,6 +122,18 @@ type ScheduledRound struct {
 	Notes          string     `json:"notes"`
 	GoogleEventID  string     `json:"google_event_id"`
 }
+
+// 轮次类型取值。task 是在线测评这类「不约时间、只有 DDL 和一条链接」的任务。
+const (
+	RoundKindInterview = "interview"
+	RoundKindTask      = "task"
+)
+
+// IsTask 表示这一轮是任务（在线测评），ScheduledAt 要当截止时间读。
+func (r Round) IsTask() bool { return r.Kind == RoundKindTask }
+
+// IsTask 同上，日程页用。
+func (r ScheduledRound) IsTask() bool { return r.Kind == RoundKindTask }
 
 // 面试方式取值。
 const (

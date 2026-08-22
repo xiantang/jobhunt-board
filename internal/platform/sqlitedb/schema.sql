@@ -22,8 +22,9 @@ CREATE TABLE IF NOT EXISTS stages (
     board_id       INTEGER NOT NULL REFERENCES boards (id) ON DELETE CASCADE,
     key            TEXT    NOT NULL,
     label          TEXT    NOT NULL,
+    -- task: 任务阶段（在线测评这类），移进来挂一条只有 DDL 和链接的记录
     kind           TEXT    NOT NULL DEFAULT 'normal'
-                   CHECK (kind IN ('normal', 'interview', 'terminal_success', 'terminal_fail')),
+                   CHECK (kind IN ('normal', 'interview', 'task', 'terminal_success', 'terminal_fail')),
     color          TEXT    NOT NULL DEFAULT '#6b7280',
     requires_owner INTEGER NOT NULL DEFAULT 0,
     -- skippable: 这一列允许被跨过去。中间隔着的列全部可跳过时，才准跨阶段流转。
@@ -56,7 +57,7 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE INDEX IF NOT EXISTS idx_applications_board ON applications (board_id, stage_key, position);
 
--- interview_rounds 是每一轮面试的独立记录：时间 + 会议方式。
+-- interview_rounds 是每一轮面试 / 每一个任务的独立记录。
 -- stage_label 存快照，阶段改名后历史仍然可读。
 -- google_accounts 存 Google Calendar 的授权凭证。
 -- 这是一个人自己用的看板，所以只有一行（CHECK 把 id 钉死在 1）。
@@ -76,6 +77,12 @@ CREATE TABLE IF NOT EXISTS interview_rounds (
     application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     stage_key      TEXT    NOT NULL,
     stage_label    TEXT    NOT NULL,
+    -- kind 决定 scheduled_at 的含义，也决定表单和日程上怎么画：
+    --   interview 面试：scheduled_at 是开始时间，duration_min 是时长
+    --   task      测评：scheduled_at 是截止时间（DDL），duration_min 无意义，
+    --                  meeting_url 存的是测评链接
+    kind           TEXT    NOT NULL DEFAULT 'interview'
+                   CHECK (kind IN ('interview', 'task')),
     scheduled_at   TEXT,
     duration_min   INTEGER NOT NULL DEFAULT 60,
     mode           TEXT    NOT NULL DEFAULT 'online' CHECK (mode IN ('online', 'onsite', 'phone')),

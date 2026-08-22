@@ -25,7 +25,7 @@ SELECT a.id, a.board_id, a.seq, b.key, a.company, a.role, a.channel, a.notes,
        a.stage_key, COALESCE(st.label, a.stage_key), COALESCE(st.kind, 'normal'),
        a.intent, a.owner_id, m.name, m.color, a.position, a.created_at, a.updated_at,
        (SELECT COUNT(*) FROM interview_rounds cr WHERE cr.application_id = a.id),
-       nr.id, nr.stage_key, nr.stage_label, nr.scheduled_at, nr.duration_min, nr.mode,
+       nr.id, nr.stage_key, nr.stage_label, nr.kind, nr.scheduled_at, nr.duration_min, nr.mode,
        nr.meeting_url, nr.meeting_place, nr.interviewer, nr.result, nr.notes
 FROM applications a
 JOIN boards b ON b.id = a.board_id
@@ -52,7 +52,7 @@ func scanApplication(sc scanner) (Application, error) {
 		createdRaw, updatedR string
 
 		rID                           sql.NullInt64
-		rStageKey, rStageLabel        sql.NullString
+		rStageKey, rStageLabel, rKind sql.NullString
 		rScheduled                    sql.NullString
 		rDuration                     sql.NullInt64
 		rMode, rURL, rPlace           sql.NullString
@@ -61,7 +61,7 @@ func scanApplication(sc scanner) (Application, error) {
 	if err := sc.Scan(&a.ID, &a.BoardID, &a.Seq, &a.BoardKey, &a.Company, &a.Role, &a.Channel, &a.Notes,
 		&a.StageKey, &a.StageLabel, &stageKind, &a.Intent, &ownerID, &name, &color,
 		&a.Position, &createdRaw, &updatedR, &a.RoundCount,
-		&rID, &rStageKey, &rStageLabel, &rScheduled, &rDuration, &rMode,
+		&rID, &rStageKey, &rStageLabel, &rKind, &rScheduled, &rDuration, &rMode,
 		&rURL, &rPlace, &rInterviewer, &rResult, &rNotes); err != nil {
 		return Application{}, err
 	}
@@ -82,6 +82,7 @@ func scanApplication(sc scanner) (Application, error) {
 			ApplicationID: a.ID,
 			StageKey:      rStageKey.String,
 			StageLabel:    rStageLabel.String,
+			Kind:          rKind.String,
 			ScheduledAt:   parseNullTime(rScheduled),
 			DurationMin:   int(rDuration.Int64),
 			Mode:          rMode.String,
@@ -207,7 +208,7 @@ func (r *repo) columnPositions(ctx context.Context, tx *sql.Tx, boardID int64, s
 // ---------- 面试轮次 ----------
 
 const selectRound = `
-SELECT id, application_id, stage_key, stage_label, scheduled_at, duration_min, mode,
+SELECT id, application_id, stage_key, stage_label, kind, scheduled_at, duration_min, mode,
        meeting_url, meeting_place, interviewer, result, notes, created_at, updated_at
 FROM interview_rounds`
 
@@ -217,7 +218,7 @@ func scanRound(sc scanner) (Round, error) {
 		scheduled            sql.NullString
 		createdRaw, updatedR string
 	)
-	if err := sc.Scan(&r.ID, &r.ApplicationID, &r.StageKey, &r.StageLabel, &scheduled, &r.DurationMin,
+	if err := sc.Scan(&r.ID, &r.ApplicationID, &r.StageKey, &r.StageLabel, &r.Kind, &scheduled, &r.DurationMin,
 		&r.Mode, &r.MeetingURL, &r.MeetingPlace, &r.Interviewer, &r.Result, &r.Notes,
 		&createdRaw, &updatedR); err != nil {
 		return Round{}, err
@@ -268,10 +269,10 @@ func (r *repo) getRound(ctx context.Context, id int64) (Round, error) {
 func insertRound(ctx context.Context, tx *sql.Tx, applicationID int64, in RoundInput, stageKey, stageLabel string) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO interview_rounds (application_id, stage_key, stage_label, scheduled_at, duration_min,
+		INSERT INTO interview_rounds (application_id, stage_key, stage_label, kind, scheduled_at, duration_min,
 		                              mode, meeting_url, meeting_place, interviewer, result, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		applicationID, stageKey, stageLabel, nullTime(in.ScheduledAt), in.DurationMin, in.Mode,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		applicationID, stageKey, stageLabel, in.Kind, nullTime(in.ScheduledAt), in.DurationMin, in.Mode,
 		in.MeetingURL, in.MeetingPlace, in.Interviewer, in.Result, in.Notes, now, now)
 	if err != nil {
 		return 0, err
@@ -381,7 +382,7 @@ func normalizeText(field, raw string, max int) (string, error) {
 // 拿不到配色就退回灰色，而不是让整条记录消失。
 const selectScheduled = `
 SELECT r.id, r.application_id, b.key, a.seq, a.company, a.role,
-       r.stage_key, r.stage_label, COALESCE(s.color, '#6b7280'),
+       r.stage_key, r.stage_label, COALESCE(s.color, '#6b7280'), r.kind,
        r.scheduled_at, r.duration_min, r.mode, r.meeting_url, r.meeting_place,
        r.interviewer, r.result, r.notes, r.google_event_id
 FROM interview_rounds r
@@ -397,7 +398,7 @@ func scanScheduled(sc interface{ Scan(...any) error }) (ScheduledRound, error) {
 		scheduled sql.NullString
 	)
 	if err := sc.Scan(&r.RoundID, &r.ApplicationID, &boardKey, &seq, &r.Company, &r.Role,
-		&r.StageKey, &r.StageLabel, &r.StageColor, &scheduled, &r.DurationMin, &r.Mode,
+		&r.StageKey, &r.StageLabel, &r.StageColor, &r.Kind, &scheduled, &r.DurationMin, &r.Mode,
 		&r.MeetingURL, &r.MeetingPlace, &r.Interviewer, &r.Result, &r.Notes,
 		&r.GoogleEventID); err != nil {
 		return ScheduledRound{}, err

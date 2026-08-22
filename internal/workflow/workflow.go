@@ -15,18 +15,20 @@ import (
 type Kind string
 
 const (
-	KindNormal    Kind = "normal"           // 普通阶段，如 HR screen、在线测评、Offer 审批中
+	KindNormal    Kind = "normal"           // 普通阶段，如 HR screen、Offer 审批中
 	KindInterview Kind = "interview"        // 面试阶段，移入时自动建一条待安排的面试轮次
+	KindTask      Kind = "task"             // 任务阶段，如在线测评：不约时间，只有截止时间和链接
 	KindOffer     Kind = "terminal_success" // 终态：拿到 Offer
 	KindRejected  Kind = "terminal_fail"    // 终态：挂了 / 主动结束
 )
 
 // Kinds 按看板顺序返回全部阶段类型，供配置界面渲染下拉。
-func Kinds() []Kind { return []Kind{KindNormal, KindInterview, KindOffer, KindRejected} }
+func Kinds() []Kind { return []Kind{KindNormal, KindInterview, KindTask, KindOffer, KindRejected} }
 
 var kindLabels = map[Kind]string{
 	KindNormal:    "普通阶段",
 	KindInterview: "面试阶段",
+	KindTask:      "任务阶段 · 带 DDL",
 	KindOffer:     "终态 · Offer",
 	KindRejected:  "终态 · 结束",
 }
@@ -50,6 +52,11 @@ func ParseKind(raw string) (Kind, error) {
 
 // Terminal 判断是否为终态阶段（Offer 或结束）。
 func (k Kind) Terminal() bool { return k == KindOffer || k == KindRejected }
+
+// TracksRound 表示移进这一列要自动挂一条待办记录。
+// 面试挂的是「待安排的面试」，任务挂的是「待定 DDL 的测评」——
+// 两者的共同点是「这一步有个具体的事要做、要占日程」，差别只在时间的含义。
+func (k Kind) TracksRound() bool { return k == KindInterview || k == KindTask }
 
 // Stage 是流转规则需要知道的阶段信息，由 stage 包从数据库加载后传进来。
 type Stage struct {

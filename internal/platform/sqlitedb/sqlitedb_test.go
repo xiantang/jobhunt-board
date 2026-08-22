@@ -257,3 +257,90 @@ func memberNames(t *testing.T, db *sql.DB) []string {
 	}
 	return out
 }
+
+// 旧库的 stages.kind 上有一条 CHECK 约束，只认四种类型；新增的 'task'
+// 会被它挡下来。SQLite 改不了 CHECK，只能重建表——这个测试守住重建：
+// 新值能写进去，老数据一行不少，索引和外键都还在。
+func TestMigrateAllowsTaskKindOnOldDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-check.db")
+
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("打开旧库失败: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE boards (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			key        TEXT    NOT NULL UNIQUE,
+			name       TEXT    NOT NULL,
+			created_at TEXT    NOT NULL
+		);
+		CREATE TABLE stages (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			board_id       INTEGER NOT NULL REFERENCES boards (id) ON DELETE CASCADE,
+			key            TEXT    NOT NULL,
+			label          TEXT    NOT NULL,
+			kind           TEXT    NOT NULL DEFAULT 'normal'
+			               CHECK (kind IN ('normal', 'interview', 'terminal_success', 'terminal_fail')),
+			color          TEXT    NOT NULL DEFAULT '#6b7280',
+			requires_owner INTEGER NOT NULL DEFAULT 0,
+			skippable      INTEGER NOT NULL DEFAULT 0,
+			position       REAL    NOT NULL,
+			created_at     TEXT    NOT NULL,
+			UNIQUE (board_id, key)
+		);
+		INSERT INTO boards (id, key, name, created_at) VALUES (1, 'JOBHUNT', '求职', '2026-01-01T00:00:00Z');
+		INSERT INTO stages (board_id, key, label, kind, position, created_at) VALUES
+			(1, 'hr_screen',   'HR screen', 'normal',    1000, '2026-01-01T00:00:00Z'),
+			(1, 'online_test', '在线测评',    'normal',    2000, '2026-01-01T00:00:00Z'),
+			(1, 'round_1',     '一面',       'interview', 3000, '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("造旧库失败: %v", err)
+	}
+	db.Close()
+
+	// 跑两次，验证幂等：重建过的库第二次不该再重建，也不该报错。
+	for i := 0; i < 2; i++ {
+		db, err = Open(path)
+		if err != nil {
+			t.Fatalf("第 %d 次迁移失败: %v", i+1, err)
+		}
+
+		var kind string
+		if err := db.QueryRow(`SELECT kind FROM stages WHERE key = 'online_test'`).Scan(&kind); err != nil {
+			t.Fatalf("读在线测评的 kind 失败: %v", err)
+		}
+		if kind != "task" {
+			t.Fatalf("第 %d 次迁移后在线测评的 kind = %q，期望 task", i+1, kind)
+		}
+
+		// 别的列不该被顺手改掉。
+		var interview string
+		if err := db.QueryRow(`SELECT kind FROM stages WHERE key = 'round_1'`).Scan(&interview); err != nil {
+			t.Fatalf("读一面的 kind 失败: %v", err)
+		}
+		if interview != "interview" {
+			t.Fatalf("一面的 kind 被改成了 %q", interview)
+		}
+
+		// 重建之后 CHECK 该放行 task，别的乱值仍然要挡住。
+		if _, err := db.Exec(`UPDATE stages SET kind = 'task' WHERE key = 'hr_screen'`); err != nil {
+			t.Fatalf("第 %d 次写入 task 类型失败: %v", i+1, err)
+		}
+		if _, err := db.Exec(`UPDATE stages SET kind = 'nonsense' WHERE key = 'hr_screen'`); err == nil {
+			t.Fatal("CHECK 约束没了：乱写的 kind 也能存进去")
+		}
+		if _, err := db.Exec(`UPDATE stages SET kind = 'normal' WHERE key = 'hr_screen'`); err != nil {
+			t.Fatalf("复原 hr_screen 失败: %v", err)
+		}
+
+		// 外键还连着：删掉看板要能级联清掉阶段。
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM stages`).Scan(&count); err != nil {
+			t.Fatalf("统计阶段失败: %v", err)
+		}
+		if count != 3 {
+			t.Fatalf("重建后阶段数 = %d，期望 3——数据在重建时丢了", count)
+		}
+		db.Close()
+	}
+}

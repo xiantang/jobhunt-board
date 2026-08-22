@@ -122,13 +122,49 @@ func TestFullFlow(t *testing.T) {
 		}
 	}
 	app = body["application"].(map[string]any)
-	if app["round_count"].(float64) != 1 {
-		t.Fatalf("进入面试阶段应自动建一条待安排记录，实际 %v", app["round_count"])
+	// 路过「在线测评」挂一条任务记录，进「一面」再挂一条面试记录。
+	if app["round_count"].(float64) != 2 {
+		t.Fatalf("路过任务阶段和面试阶段各该挂一条记录，实际 %v", app["round_count"])
 	}
 
-	// 补上面试时间与会议链接。
+	// 补上面试时间与会议链接。任务那条的 kind 是 task，挑出面试那条来排期。
 	_, detail := do(t, r, http.MethodGet, "/api/applications/"+strconv.Itoa(id), nil)
-	roundID := int(detail["rounds"].([]any)[0].(map[string]any)["id"].(float64))
+	rounds := detail["rounds"].([]any)
+	var roundID, taskID int
+	for _, raw := range rounds {
+		round := raw.(map[string]any)
+		if round["kind"] == "task" {
+			taskID = int(round["id"].(float64))
+			continue
+		}
+		roundID = int(round["id"].(float64))
+	}
+	if taskID == 0 || roundID == 0 {
+		t.Fatalf("该有一条任务和一条面试，实际 %v", rounds)
+	}
+
+	// 任务只填截止时间和测评链接，时长不参与——传了也不该落库。
+	code, body = do(t, r, http.MethodPatch, "/api/rounds/"+strconv.Itoa(taskID), map[string]any{
+		"scheduled_at": "2030-01-01T23:59:00+08:00",
+		"meeting_url":  "https://assess.example.com/paper",
+		"duration_min": 90,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("填测评 DDL 返回 %d：%v", code, body)
+	}
+	_, detail = do(t, r, http.MethodGet, "/api/applications/"+strconv.Itoa(id), nil)
+	for _, raw := range detail["rounds"].([]any) {
+		round := raw.(map[string]any)
+		if int(round["id"].(float64)) != taskID {
+			continue
+		}
+		if round["meeting_url"] != "https://assess.example.com/paper" {
+			t.Fatalf("测评链接没存下：%v", round)
+		}
+		if round["duration_min"].(float64) != 0 {
+			t.Fatalf("任务不该有时长，实际 %v", round["duration_min"])
+		}
+	}
 	code, body = do(t, r, http.MethodPatch, "/api/rounds/"+strconv.Itoa(roundID), map[string]any{
 		"scheduled_at":  "2030-01-02T14:00:00+08:00",
 		"meeting_url":   "https://meeting.example.com/abc",
@@ -138,9 +174,11 @@ func TestFullFlow(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("排期返回 %d：%v", code, body)
 	}
+	// 卡片上显示的是「最近一件待办」，不分面试还是任务：
+	// 测评 01-01 截止比面试 01-02 更早，所以带出来的是测评那条。
 	next := body["application"].(map[string]any)["next_round"].(map[string]any)
-	if next["meeting_url"] != "https://meeting.example.com/abc" {
-		t.Fatalf("卡片没带出会议链接：%v", next)
+	if next["kind"] != "task" || next["meeting_url"] != "https://assess.example.com/paper" {
+		t.Fatalf("卡片该带出更早的那条（测评 DDL）：%v", next)
 	}
 
 	// 任意阶段可直达终态。

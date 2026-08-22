@@ -65,8 +65,11 @@ type UpdateInput struct {
 	Intent  *string
 }
 
-// RoundInput 是安排一场面试的入参。
+// RoundInput 是安排一场面试 / 建一条任务的入参。
 type RoundInput struct {
+	// Kind 空着按面试处理。任务（在线测评）的 ScheduledAt 是 DDL，
+	// MeetingURL 是测评链接，时长和方式都不适用。
+	Kind         string
 	ScheduledAt  *time.Time
 	DurationMin  int
 	Mode         string
@@ -210,9 +213,9 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput, act
 			return Application{}, apperr.Internal(err)
 		}
 	}
-	// 起始阶段本身就是面试阶段时，同样先挂一条待安排的记录。
-	if entry.Kind == workflow.KindInterview {
-		if _, err := insertRound(ctx, tx, id, defaultRound(), entry.Key, entry.Label); err != nil {
+	// 起始阶段本身就要挂记录（面试 / 任务）时，同样先挂一条空的。
+	if entry.Kind.TracksRound() {
+		if _, err := insertRound(ctx, tx, id, defaultRound(roundKindOf(entry.Kind)), entry.Key, entry.Label); err != nil {
 			return Application{}, apperr.Internal(err)
 		}
 	}
@@ -390,7 +393,7 @@ func (s *Service) Move(ctx context.Context, id int64, toKey string, index int, a
 			"将阶段从「"+from.Label+"」推进到「"+to.Label+"」"); err != nil {
 			return Application{}, apperr.Internal(err)
 		}
-		if to.Kind == workflow.KindInterview {
+		if to.Kind.TracksRound() {
 			var pending int
 			if err := tx.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM interview_rounds WHERE application_id = ? AND stage_key = ? AND result = 'pending'`,
@@ -398,11 +401,16 @@ func (s *Service) Move(ctx context.Context, id int64, toKey string, index int, a
 				return Application{}, apperr.Internal(err)
 			}
 			if pending == 0 {
-				if _, err := insertRound(ctx, tx, id, defaultRound(), to.Key, to.Label); err != nil {
+				kind := roundKindOf(to.Kind)
+				if _, err := insertRound(ctx, tx, id, defaultRound(kind), to.Key, to.Label); err != nil {
 					return Application{}, apperr.Internal(err)
 				}
+				what := "面试"
+				if kind == RoundKindTask {
+					what = "任务，等着填截止时间"
+				}
 				if err := insertEvent(ctx, tx, id, actorID, EventRoundScheduled, "", "",
-					"新建了一条待安排的「"+to.Label+"」面试"); err != nil {
+					"新建了一条待安排的「"+to.Label+"」"+what); err != nil {
 					return Application{}, apperr.Internal(err)
 				}
 			}
@@ -422,6 +430,9 @@ func (s *Service) ScheduleRound(ctx context.Context, applicationID int64, in Rou
 	if err != nil {
 		return Round{}, err
 	}
+	// 轮次是挂在当前阶段下的，类型就由这一列决定：面试列建面试，
+	// 任务列（在线测评）建任务。让调用方传反而会和阶段配置打架。
+	in.Kind = roundKindOf(current.StageKind)
 	normalized, err := normalizeRound(in)
 	if err != nil {
 		return Round{}, err
@@ -437,8 +448,11 @@ func (s *Service) ScheduleRound(ctx context.Context, applicationID int64, in Rou
 	if err != nil {
 		return Round{}, apperr.Internal(err)
 	}
-	if err := insertEvent(ctx, tx, applicationID, actorID, EventRoundScheduled, "", "",
-		"安排了一场「"+current.StageLabel+"」面试"+whenSuffix(normalized.ScheduledAt)); err != nil {
+	detail := "安排了一场「" + current.StageLabel + "」面试" + whenSuffix(normalized.ScheduledAt)
+	if normalized.Kind == RoundKindTask {
+		detail = "登记了「" + current.StageLabel + "」任务" + dueSuffix(normalized.ScheduledAt)
+	}
+	if err := insertEvent(ctx, tx, applicationID, actorID, EventRoundScheduled, "", "", detail); err != nil {
 		return Round{}, apperr.Internal(err)
 	}
 	if err := touch(ctx, tx, applicationID); err != nil {
@@ -464,13 +478,27 @@ func (s *Service) UpdateRound(ctx context.Context, roundID int64, in RoundUpdate
 	switch {
 	case in.ClearSchedule && current.ScheduledAt != nil:
 		sets = append(sets, "scheduled_at = NULL")
-		logs = append(logs, "取消了「"+current.StageLabel+"」的面试时间")
+		if current.IsTask() {
+			logs = append(logs, "清空了「"+current.StageLabel+"」的截止时间")
+		} else {
+			logs = append(logs, "取消了「"+current.StageLabel+"」的面试时间")
+		}
 	case in.ScheduledAt != nil:
 		if current.ScheduledAt == nil || !current.ScheduledAt.Equal(*in.ScheduledAt) {
 			sets = append(sets, "scheduled_at = ?")
 			args = append(args, in.ScheduledAt.UTC().Format(time.RFC3339))
-			logs = append(logs, "把「"+current.StageLabel+"」面试定在"+whenText(in.ScheduledAt))
+			if current.IsTask() {
+				logs = append(logs, "把「"+current.StageLabel+"」的截止时间定在"+whenText(in.ScheduledAt))
+			} else {
+				logs = append(logs, "把「"+current.StageLabel+"」面试定在"+whenText(in.ScheduledAt))
+			}
 		}
+	}
+
+	// 任务没有时长和方式，前端也不会送——真送来了就当没看见，
+	// 免得在「在线测评」上留下一个 45 分钟的假时长。
+	if current.IsTask() {
+		in.DurationMin, in.Mode = nil, nil
 	}
 
 	if in.DurationMin != nil && *in.DurationMin != current.DurationMin {
@@ -520,7 +548,11 @@ func (s *Service) UpdateRound(ctx context.Context, roundID int64, in RoundUpdate
 		}
 	}
 	if meetingChanged {
-		logs = append(logs, "更新了「"+current.StageLabel+"」的会议信息")
+		what := "会议信息"
+		if current.IsTask() {
+			what = "测评链接"
+		}
+		logs = append(logs, "更新了「"+current.StageLabel+"」的"+what)
 	}
 
 	if in.Result != nil {
@@ -645,23 +677,43 @@ func (s *Service) checkOwner(ctx context.Context, id *int64) error {
 }
 
 // defaultRound 是自动创建的「待安排」面试记录。
-func defaultRound() RoundInput {
-	return RoundInput{DurationMin: 60, Mode: ModeOnline, Result: ResultPending}
+// defaultRound 是移进面试 / 任务阶段时自动挂的那条空记录。
+// 面试给 60 分钟的默认时长；任务没有时长这回事，存 0。
+func defaultRound(kind string) RoundInput {
+	if kind == RoundKindTask {
+		return RoundInput{Kind: RoundKindTask, Mode: ModeOnline, Result: ResultPending}
+	}
+	return RoundInput{Kind: RoundKindInterview, DurationMin: 60, Mode: ModeOnline, Result: ResultPending}
 }
 
 func normalizeRound(in RoundInput) (RoundInput, error) {
 	out := in
-	if out.DurationMin == 0 {
-		out.DurationMin = 60
+	if out.Kind == "" {
+		out.Kind = RoundKindInterview
 	}
-	if out.DurationMin < 5 || out.DurationMin > 600 {
-		return RoundInput{}, apperr.Invalid("duration_min", "面试时长需要在 5~600 分钟之间")
+	if out.Kind != RoundKindInterview && out.Kind != RoundKindTask {
+		return RoundInput{}, apperr.Invalid("kind", "未知的轮次类型："+out.Kind)
 	}
-	mode, err := normalizeMode(out.Mode)
-	if err != nil {
-		return RoundInput{}, err
+
+	if out.Kind == RoundKindTask {
+		// 任务只有一个截止时刻，时长和方式都没有意义。mode 有 CHECK 约束，
+		// 存个占位值即可，界面上不会显示。
+		out.DurationMin = 0
+		out.Mode = ModeOnline
+	} else {
+		if out.DurationMin == 0 {
+			out.DurationMin = 60
+		}
+		if out.DurationMin < 5 || out.DurationMin > 600 {
+			return RoundInput{}, apperr.Invalid("duration_min", "面试时长需要在 5~600 分钟之间")
+		}
+		mode, err := normalizeMode(out.Mode)
+		if err != nil {
+			return RoundInput{}, err
+		}
+		out.Mode = mode
 	}
-	out.Mode = mode
+
 	result, err := normalizeResult(out.Result)
 	if err != nil {
 		return RoundInput{}, err
@@ -681,6 +733,14 @@ func normalizeRound(in RoundInput) (RoundInput, error) {
 		return RoundInput{}, err
 	}
 	return out, nil
+}
+
+// roundKindOf 把阶段类型翻成轮次类型。
+func roundKindOf(k workflow.Kind) string {
+	if k == workflow.KindTask {
+		return RoundKindTask
+	}
+	return RoundKindInterview
 }
 
 func normalizeIntent(raw string) (string, error) {
@@ -735,6 +795,13 @@ func whenSuffix(t *time.Time) string {
 		return "（待安排时间）"
 	}
 	return "，时间 " + whenText(t)
+}
+
+func dueSuffix(t *time.Time) string {
+	if t == nil {
+		return "（还没定截止时间）"
+	}
+	return "，截止 " + whenText(t)
 }
 
 // ---------- 日程 ----------
