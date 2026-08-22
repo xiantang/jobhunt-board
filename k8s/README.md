@@ -109,23 +109,30 @@ k -n jobhunt create secret generic jobhunt-secrets \
   --from-literal=GOOGLE_REDIRECT_URL='https://jobhunt.vim0.com/oauth/google/callback'
 ```
 
-本地 `.env` 里已经有这几个值的话，可以直接由它生成，省得手抄：
+本地 `.env` 里已经有这几个值的话，可以直接由它生成，省得手抄。
+注意 `.env` 里的 `GOOGLE_REDIRECT_URL` 指向 `http://localhost:8080/...`,
+灌进集群会让线上 OAuth 回调到本机，所以要把那一行换掉：
 
 ```bash
-k -n jobhunt create secret generic jobhunt-secrets --from-env-file=.env
+k -n jobhunt create secret generic jobhunt-secrets \
+  --from-env-file=<(grep -v '^GOOGLE_REDIRECT_URL=' .env; \
+                    echo "GOOGLE_REDIRECT_URL=https://jobhunt.vim0.com/oauth/google/callback") \
+  --dry-run=client -o yaml | k apply -f -
 ```
 
-> ⚠️ 两件事要先看一眼再敲：
-> - `.env` 里的 `GOOGLE_REDIRECT_URL` 指向的是 `http://localhost:8080/...`,
->   直接灌进去线上 OAuth 会回调到本机。灌完补一条覆盖它：
->   `k -n jobhunt create secret generic jobhunt-secrets --from-env-file=.env \
->   --from-literal=GOOGLE_REDIRECT_URL='https://jobhunt.vim0.com/oauth/google/callback' \
->   --dry-run=client -o yaml | k apply -f -`
-> - `--from-env-file` 会把文件里【所有】键都变成环境变量。确认里面没有不该上
->   集群的东西（本地路径、调试开关）。
+覆盖动作放在 `.env` 那一侧，是因为 **`--from-env-file` 不能和 `--from-literal`
+同时用**（`kubectl` 直接报 `from-env-file cannot be combined with
+from-file or from-literal`）。`<(...)` 是 bash 的进程替换，`sh` 下不可用。
 
-Deployment 里是 `optional: true`，所以这个 Secret 不存在服务也能起来，只是
-「✨ AI 录入」和 Google 日历同步两个入口不显示。
+已经建过、只想改其中一个键，用 patch,不必整个重建：
+
+```bash
+k -n jobhunt patch secret jobhunt-secrets \
+  -p '{"stringData":{"GOOGLE_REDIRECT_URL":"https://jobhunt.vim0.com/oauth/google/callback"}}'
+```
+
+> `.env` 里目前没有 `OPENAI_API_KEY` —— 线上想要「✨ AI 录入」得单独补一条
+> `--from-literal=OPENAI_API_KEY='sk-...'`,或者先加进 `.env` 再生成。
 
 > ⚠️ 上线后必须去 [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 > 把 `https://jobhunt.vim0.com/oauth/google/callback` 加进「Authorized redirect
