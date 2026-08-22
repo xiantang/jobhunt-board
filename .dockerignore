@@ -1,0 +1,32 @@
+# ⚠️ 这个文件是安全边界，不只是构建加速。
+#
+# data/ 里的 app.db 存着真实投递记录，以及 google_accounts 表里的
+# refresh_token —— 那是 Google 的长期凭证，拿到就能持续读写日历。
+# 镜像推到 ECR / GHCR 之后谁能拉到就等于谁拿到它。
+# 同理 .env 里是 OAuth client secret 和 OpenAI key。
+#
+# 排除它们不影响运行：数据库由 PVC 在 /data 挂载，密钥由 k8s Secret 注入。
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# 对话记录：含个人信息，且与构建无关
+chat-history/
+
+# 构建产物与本地开发残留
+tmp/
+.air.toml
+
+# 版本库自身。COPY . . 会把整个 .git 带进构建上下文 ——
+# 即使最终镜像不含它，多阶段构建的中间层里也有。
+.git/
+.gitignore
+.github/
+
+# 部署与文档，进不了二进制
+README.md
+Dockerfile
+.dockerignore
+run.sh

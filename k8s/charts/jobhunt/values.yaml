@@ -1,0 +1,91 @@
+# 这是唯一「给使用者改」的文件，templates/ 里的是实现细节。
+
+# ⚠️ 固定为 1,不要调大。
+#
+# 数据库是单文件 SQLite,放在一块 ReadWriteOnce 的 PVC 上。多个副本
+# 同时写同一个文件 = 数据损坏;而 RWO 卷本身也不允许被两个节点挂载。
+# 想要多副本，前提是先换掉存储层(Postgres),不是改这个数字。
+replicaCount: 1
+
+image:
+  # 公开的 GHCR 镜像，不需要 imagePullSecret。
+  # 仓库开源之后镜像也是公开的 —— 这正是不用 ECR 的原因：
+  # 省掉了「12 小时过期的登录 token 要靠 CronJob 定期刷新」那一整套东西。
+  repository: ghcr.io/xiantang/jobhunt-board
+  # 留空 → 回退到 Chart.yaml 的 appVersion（不可变的 sha-<commit>）。
+  # 发布请改 Chart.yaml,不要在这写死 —— 否则回滚时两个地方对不上。
+  tag: ""
+  # tag 不可变，没必要每次回源确认
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+# 容器实际监听的端口（Dockerfile 里 CMD 的 -addr :8080）
+containerPort: 8080
+
+ingress:
+  enabled: true
+  className: traefik
+  host: jobhunt.vim0.com
+  annotations:
+    # 证书由 cert-manager 签，走 Cloudflare DNS-01(集群里已有这个 ClusterIssuer,
+    # 博客在用同一个)。
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    enabled: true
+    # 留空则自动生成 <release-name>-tls
+    secretName: ""
+
+# ── 访问控制 ────────────────────────────────────────────────────────
+#
+# 这个看板没有任何登录功能，里面是真实的投递记录、面试时间、面试官姓名。
+# 公网 HTTPS 一暴露，任何知道地址的人都能读写。所以在 Ingress 前面挂一层
+# Traefik 的 BasicAuth 中间件。
+#
+# 口令【不在 git 里】,要手动在集群里建 Secret,见 k8s/README.md。
+basicAuth:
+  enabled: true
+  # 存 htpasswd 内容的 Secret 名字
+  secretName: jobhunt-basicauth
+  # ⚠️ Traefik 的 CRD 组名换过：v2 早期是 traefik.containo.us,v3 是 traefik.io。
+  #    k3s 自带的 Traefik 版本决定该用哪个。查一下再改：
+  #      k get crd | grep middlewares
+  apiVersion: traefik.io/v1alpha1
+
+# ── 应用密钥 ────────────────────────────────────────────────────────
+#
+# OPENAI_API_KEY / GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URL
+# 都从这个 Secret 注入，同样【不在 git 里】,手动创建。
+#
+# optional: true —— Secret 不存在时 Pod 照常启动，只是 AI 录入和日历同步
+# 两个功能不显示入口（应用本来就是这么设计的）。这样「密钥还没配」不会
+# 表现成 Pod 起不来。
+secretName: jobhunt-secrets
+
+# 数据卷：SQLite 文件落在这。Pod 重建、节点重启之后数据都还在。
+persistence:
+  enabled: true
+  # 留空用集群默认 StorageClass。k3s 默认是 local-path。
+  #
+  # ⚠️ local-path 的含义：数据实际存在【那台节点】的本地磁盘上
+  #    (/var/lib/rancher/k3s/storage/...)。单节点集群这没问题，
+  #    但它不是备份 —— EC2 的根卷 delete_on_termination = true,
+  #    机器一旦 terminate,这块数据跟着消失。备份见 k8s/README.md。
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  mountPath: /data
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    # 没有 cpu limit 是故意的：CPU 是可压缩资源，超了会被限流而不是被杀。
+    # 设了 limit 反而容易在冷启动/编译模板时被无谓地掐住。
+    memory: 256Mi
+
+# 健康检查路径，应用里有现成的 /healthz
+probePath: /healthz

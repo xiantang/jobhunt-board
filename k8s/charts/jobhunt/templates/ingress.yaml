@@ -1,0 +1,39 @@
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "jobhunt.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "jobhunt.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.basicAuth.enabled }}
+    # 中间件的引用格式是 <namespace>-<name>@kubernetescrd,固定写法。
+    # 少了 @kubernetescrd 后缀 Traefik 会找不到它，而且【不会报错】——
+    # 它只是静默地不挂中间件，于是看板就裸奔在公网上。
+    # 上线后务必实测一次：curl 不带 -u 应该返回 401。
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-%s-basicauth@kubernetescrd" .Release.Namespace $fullName }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" $fullName) }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

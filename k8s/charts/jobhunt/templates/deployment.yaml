@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "jobhunt.fullname" . }}
+  labels:
+    {{- include "jobhunt.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  # ⚠️ 必须是 Recreate,不能用默认的 RollingUpdate。
+  #
+  # 滚动更新会在杀掉旧 Pod 之前先起新 Pod,而这两个 Pod 会同时挂载同一块
+  # RWO 卷、同时打开同一个 SQLite 文件。轻则新 Pod 卡在 ContainerCreating
+  # （卷被占着挂不上）,重则两个进程同时写，数据库损坏。
+  #
+  # 代价是发布期间有几秒不可用。对一个自己用的看板，这个代价可以忽略。
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      {{- include "jobhunt.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jobhunt.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        # 镜像里已经 USER nonroot,这里再声明一次是让 kubelet 在启动【前】
+        # 就拒绝以 root 运行的镜像 —— 万一哪天 Dockerfile 的 USER 被删掉，
+        # 会立刻失败而不是悄悄以 root 跑起来。
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # 卷里的文件属主设成这个 GID,否则 nonroot 写不进 PVC。
+        fsGroup: 65532
+      containers:
+        - name: jobhunt
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -addr
+            - ":{{ .Values.containerPort }}"
+            - -db
+            - "{{ .Values.persistence.mountPath }}/app.db"
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+
+          # 密钥来源。optional: true 让「还没建这个 Secret」不至于挡住启动 ——
+          # 应用本来就支持不配密钥运行（少两个功能入口）。
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+                optional: true
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # 根文件系统只读。镜像是 distroless（没有 shell、没有包管理器）,
+            # 再加上只读根，攻击者即使拿到执行权也没地方落文件。
+            # 唯一需要写的地方是 /data(PVC)和 /tmp（下面挂了 emptyDir）。
+            readOnlyRootFilesystem: true
+
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            # SQLite 在某些操作（排序、VACUUM）下会写临时文件。根文件系统只读，
+            # 所以必须给它一个可写的 /tmp,否则那些操作会在运行时报 disk I/O error。
+            - name: tmp
+              mountPath: /tmp
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probePath }}
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probePath }}
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "jobhunt.fullname" . }}-data
+          {{- else }}
+          # 关掉持久化只该用于临时验证：Pod 一重建数据就没了。
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}

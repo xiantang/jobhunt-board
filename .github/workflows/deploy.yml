@@ -1,0 +1,121 @@
+# 构建生产镜像推到 GHCR,再把 chart 的 appVersion 指向这次构建。
+#
+# 整条链路：
+#   push master → 构建镜像 → 推 ghcr.io → 回写 k8s/charts/jobhunt/Chart.yaml
+#   的 appVersion → ArgoCD 轮询到这个 commit → 滚动更新 EC2 上那台 k3s
+#
+# 全程不需要任何手动保管的密钥：GHCR 用 GITHUB_TOKEN 推，回写也用它。
+# 前提是仓库公开 —— 镜像跟着公开，集群拉取不需要 imagePullSecret。
+name: Deploy
+
+on:
+  push:
+    branches: [ master ]
+    paths-ignore:
+      # 这些改动进不了镜像，不值得重新构建。
+      #
+      # k8s/** 放在这里还有第二个作用：挡住最后那步回写 appVersion 的
+      # bot commit 循环触发自己。(其实有双保险 —— GITHUB_TOKEN 推的 commit
+      # GitHub 本身就不会再触发 workflow —— 但显式挡住更清楚。)
+      - 'k8s/**'
+      - '**.md'
+      - '.gitignore'
+      - 'run.sh'
+      - '.air.toml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet & test
+        run: go vet ./... && go test ./...
+
+  build-push:
+    # 测试不过就不发布。这是这条流水线里唯一的质量闸口，
+    # 因为下游是自动的 —— ArgoCD 不会替你复核镜像里是什么。
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # write 是为了最后那步把 appVersion 回填进 Chart.yaml 并 push
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # 只推 sha-<完整 commit>,不推 latest。
+          # 集群拉的是 Chart.yaml 里的 appVersion（一个不可变的 sha- tag）,
+          # latest 没有消费者;而且 tag 可变的话「回滚」只是把同一个移动靶
+          # 重新拉一遍，回滚是假的。
+          tags: |
+            type=sha,format=long
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # 只构建 amd64:目标就是那一台 c7i-flex.large。
+          # 加 arm64 要开 QEMU 模拟，构建时间翻几倍，而没有任何消费者。
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 关掉 SLSA 证明：它会给每个平台再挂一个 attestation 清单，
+          # 在仓库里堆出成倍的 untagged 孤儿镜像。这个镜像只有自己的集群拉，
+          # 没有任何东西会去校验来源。
+          provenance: false
+
+      # ── 发布闸口：把 appVersion 指向刚推上去的 tag ──────────────────────
+      #
+      # ⚠️ 副作用：仓库里会多出机器人 commit,本地下次 push 前必须先 git pull,
+      #    否则会被拒绝（远端多了你没有的 commit）。
+      - name: Bump chart appVersion
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          NEW_TAG="sha-${GITHUB_SHA}"
+          CHART=k8s/charts/jobhunt/Chart.yaml
+
+          # 只替换 appVersion 那一行，注释和其他字段不动
+          sed -i "s|^appVersion: .*|appVersion: \"${NEW_TAG}\"|" "$CHART"
+
+          if git diff --quiet -- "$CHART"; then
+            echo "appVersion 已经是 ${NEW_TAG},无需提交（多半是重跑了同一个 commit）"
+            exit 0
+          fi
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$CHART"
+          git commit -m "chore(k8s): release ${NEW_TAG}" \
+                     -m "由 deploy.yml 自动回填。镜像已推到 GHCR,ArgoCD 会自动同步。"
+
+          # checkout 出来是 detached HEAD,要显式指定推到哪个分支
+          git push origin "HEAD:${GITHUB_REF_NAME}"

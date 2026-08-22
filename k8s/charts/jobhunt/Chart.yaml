@@ -1,0 +1,20 @@
+apiVersion: v2
+name: jobhunt
+description: 面试流程看板 —— 单个 Go 二进制 + SQLite,跑在 k3s 上
+
+type: application
+
+# chart 自身的版本。改模板或 values 结构时递增（必须是 SemVer）。
+version: 0.1.0
+
+# 被部署的镜像 tag,也是这套东西的【发布闸口】。
+#
+# 由 .github/workflows/deploy.yml 在镜像推成功之后自动回填成 sha-<commit>,
+# ArgoCD 轮询到这个 commit 就会滚动更新。所以「push 代码」本身不会上线，
+# 「appVersion 变了」才会 —— 两者之间隔着一次镜像构建成功。
+#
+# 引号必须有：纯数字的 tag 不加引号会被 YAML 当成数字。
+#
+# ⚠️ 首次部署前这里是占位值。得先让 CI 跑一次把它填上，否则 ArgoCD 会去拉
+#    一个不存在的 tag,Pod 卡在 ImagePullBackOff。
+appVersion: "sha-REPLACE_ME_FIRST_CI_RUN"

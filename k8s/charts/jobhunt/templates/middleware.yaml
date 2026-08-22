@@ -1,0 +1,23 @@
+{{- if .Values.basicAuth.enabled -}}
+# Traefik 的 BasicAuth 中间件。它在请求到达应用【之前】拦一道 —— 应用本身
+# 一行鉴权代码都没有，所有防护都在这里。
+#
+# 口令存在 Secret {{ .Values.basicAuth.secretName }} 里（htpasswd 格式）,
+# 那个 Secret 不在 git 里，手动创建，见 k8s/README.md。
+#
+# ⚠️ Google OAuth 回调不受影响。回调是【用户浏览器】跳回
+#    jobhunt.vim0.com/oauth/google/callback,浏览器会自动带上已缓存的
+#    BasicAuth 凭据，所以不需要为回调路径开豁免口子。
+#    （如果 Google 是服务端直接回调就得另说，但 OAuth 授权码流程不是。）
+apiVersion: {{ .Values.basicAuth.apiVersion }}
+kind: Middleware
+metadata:
+  name: {{ include "jobhunt.fullname" . }}-basicauth
+  labels:
+    {{- include "jobhunt.labels" . | nindent 4 }}
+spec:
+  basicAuth:
+    secret: {{ .Values.basicAuth.secretName }}
+    # 浏览器弹框上显示的名字
+    realm: jobhunt
+{{- end }}
