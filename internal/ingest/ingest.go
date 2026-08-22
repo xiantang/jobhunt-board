@@ -47,7 +47,8 @@ type DraftRound struct {
 	Interviewer  string     `json:"interviewer"`
 	Notes        string     `json:"notes"`
 	// Deadline 是邮件里的截止日期（如测评链接过期时间）。
-	// 它不是面试时间，所以单独一个字段，只会被折进 Notes 里展示。
+	// 它不是面试时间，所以单独一个字段：落在任务阶段（在线测评）时会成为
+	// 这一轮的 DDL，别的阶段就只折进 Notes 里展示。
 	Deadline string `json:"deadline"`
 }
 

@@ -102,7 +102,7 @@ func TestParseTimeRejectsGarbage(t *testing.T) {
 func testStages() []stage.Stage {
 	return []stage.Stage{
 		{Key: "hr_screen", Label: "HR screen", Kind: workflow.KindNormal},
-		{Key: "online_test", Label: "在线测评", Kind: workflow.KindNormal, Skippable: true},
+		{Key: "online_test", Label: "在线测评", Kind: workflow.KindTask, Skippable: true},
 		{Key: "round_1", Label: "一面", Kind: workflow.KindInterview},
 		{Key: "round_2", Label: "二面", Kind: workflow.KindInterview},
 	}
@@ -157,5 +157,34 @@ func TestToDraftDropsUnknownStageKey(t *testing.T) {
 
 	if d.StageKey != "" || d.StageLabel != "" {
 		t.Fatalf("模型编出来的阶段应当被丢掉：%q / %q", d.StageKey, d.StageLabel)
+	}
+}
+
+// 在线测评是任务阶段：邮件里的「28 号之前完成」要变成这一轮的 DDL，
+// 而不是继续只躺在备注里。取 23:59，否则 28 号当天就成了已过期。
+func TestTaskDue(t *testing.T) {
+	in := DraftRound{Deadline: "2026-08-28"}
+
+	got := taskDue(in, workflow.KindTask)
+	if got == nil {
+		t.Fatal("任务阶段该把截止日期变成 DDL")
+	}
+	want := time.Date(2026, 8, 28, 23, 59, 0, 0, time.Local)
+	if !got.Equal(want) {
+		t.Fatalf("DDL = %v，期望 %v", got, want)
+	}
+
+	// 面试阶段的「截止日期」多半是投递截止之类的背景信息，不该冒充排期。
+	if got := taskDue(in, workflow.KindInterview); got != nil {
+		t.Fatalf("面试阶段不该动 scheduled_at，实际 %v", got)
+	}
+	// 邮件里明确给了时间就以时间为准，别被截止日期盖掉。
+	at := time.Date(2026, 8, 26, 10, 0, 0, 0, time.Local)
+	if got := taskDue(DraftRound{Deadline: "2026-08-28", ScheduledAt: &at}, workflow.KindTask); got != nil {
+		t.Fatalf("已经有具体时间时不该覆盖，实际 %v", got)
+	}
+	// 日期解析不出来就当没有，不要塞一个零值时间进去。
+	if got := taskDue(DraftRound{Deadline: "下周五"}, workflow.KindTask); got != nil {
+		t.Fatalf("解析不了的日期该忽略，实际 %v", got)
 	}
 }

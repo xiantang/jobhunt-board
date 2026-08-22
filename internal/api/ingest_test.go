@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"interview/internal/ai"
 )
@@ -315,5 +316,49 @@ func TestIngestConfirmDefaultsOwnerToActor(t *testing.T) {
 	}
 	if got := body["application"].(map[string]any)["owner_id"]; got != nil {
 		t.Fatalf("显式选了「未指定」，不该被兜底成当前用户：%v", got)
+	}
+}
+
+// 在线测评是任务阶段：邮件里的「28 号之前完成」要落成这一轮的 DDL，
+// 而不是只留在备注里等人手填。取当天 23:59——零点会让 28 号当天就算过期。
+func TestIngestConfirmTurnsDeadlineIntoDueDate(t *testing.T) {
+	r := setupWithModel(t, &fakeModel{reply: foodpandaReply})
+
+	code, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/ingest/confirm", map[string]any{
+		"company":      "foodpanda",
+		"stage_key":    "online_test",
+		"create_round": true,
+		"deadline":     "2026-08-28",
+		"meeting_url":  "https://screen-ide.coderpad.io/?id=1461",
+		"round_notes":  "在线技术测评",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("确认录入返回 %d：%v", code, body)
+	}
+	id := strconv.Itoa(int(body["application"].(map[string]any)["id"].(float64)))
+
+	_, detail := do(t, r, http.MethodGet, "/api/applications/"+id, nil)
+	got := detail["rounds"].([]any)[0].(map[string]any)
+	if got["kind"] != "task" {
+		t.Fatalf("在线测评这一轮该是 task，实际 %v", got["kind"])
+	}
+	when, _ := got["scheduled_at"].(string)
+	if when == "" {
+		t.Fatalf("截止日期没变成 DDL：%v", got)
+	}
+	due, err := time.Parse(time.RFC3339, when)
+	if err != nil {
+		t.Fatalf("DDL 不是合法时间 %q: %v", when, err)
+	}
+	local := due.Local()
+	if local.Year() != 2026 || local.Month() != time.August || local.Day() != 28 ||
+		local.Hour() != 23 || local.Minute() != 59 {
+		t.Fatalf("DDL = %v，期望 2026-08-28 23:59（本地时区）", local)
+	}
+	if got["meeting_url"] != "https://screen-ide.coderpad.io/?id=1461" {
+		t.Fatalf("测评链接没存下：%v", got["meeting_url"])
+	}
+	if got["duration_min"].(float64) != 0 {
+		t.Fatalf("任务不该有时长，实际 %v", got["duration_min"])
 	}
 }

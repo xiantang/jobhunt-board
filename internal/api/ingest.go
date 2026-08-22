@@ -49,14 +49,18 @@ type ConfirmIngestReq struct {
 	Intent        string `json:"intent"    binding:"omitempty,oneof=low normal high"`
 	StageKey      string `json:"stage_key"`
 
-	CreateRound  bool    `json:"create_round"`
-	ScheduledAt  *string `json:"scheduled_at"`
-	DurationMin  int     `json:"duration_min"  binding:"omitempty,min=5,max=600"`
-	Mode         string  `json:"mode"          binding:"omitempty,oneof=online onsite phone"`
-	MeetingURL   string  `json:"meeting_url"   binding:"max=300"`
-	MeetingPlace string  `json:"meeting_place" binding:"max=120"`
-	Interviewer  string  `json:"interviewer"   binding:"max=60"`
-	RoundNotes   string  `json:"round_notes"   binding:"max=2000"`
+	CreateRound bool    `json:"create_round"`
+	ScheduledAt *string `json:"scheduled_at"`
+	// Deadline 是「几号之前完成」。落在任务阶段（在线测评）且没给具体时间时，
+	// 它就是这一轮的 DDL；页面上会先把它填进「截止时间」，所以正常路径下
+	// 走的是 ScheduledAt，这里是给不带界面的调用方兜底。
+	Deadline     string `json:"deadline"      binding:"max=10"`
+	DurationMin  int    `json:"duration_min"  binding:"omitempty,min=5,max=600"`
+	Mode         string `json:"mode"          binding:"omitempty,oneof=online onsite phone"`
+	MeetingURL   string `json:"meeting_url"   binding:"max=300"`
+	MeetingPlace string `json:"meeting_place" binding:"max=120"`
+	Interviewer  string `json:"interviewer"   binding:"max=60"`
+	RoundNotes   string `json:"round_notes"   binding:"max=2000"`
 }
 
 // ConfirmIngest 把确认后的草稿写进看板：建卡 / 复用已有卡 → 流转 → 录入这一轮。
@@ -98,6 +102,7 @@ func (h *Handler) ConfirmIngest(c *gin.Context) {
 			MeetingURL:   req.MeetingURL,
 			MeetingPlace: req.MeetingPlace,
 			Interviewer:  req.Interviewer,
+			Deadline:     req.Deadline,
 			Notes:        req.RoundNotes,
 		},
 	}, ginx.ActorID(c))

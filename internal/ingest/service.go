@@ -229,6 +229,10 @@ func (s *Service) Confirm(ctx context.Context, boardID int64, in ConfirmInput, a
 // recordRound 录入这一轮。流转进面试阶段时系统会自动挂一条「待安排」，
 // 这里优先把信息补到那一条上，避免同一个阶段出现两条记录。
 func (s *Service) recordRound(ctx context.Context, app application.Application, in DraftRound, actorID int64) (application.Round, error) {
+	if due := taskDue(in, app.StageKind); due != nil {
+		in.ScheduledAt = due
+	}
+
 	input := application.RoundInput{
 		ScheduledAt:  in.ScheduledAt,
 		DurationMin:  in.DurationMin,
@@ -264,6 +268,24 @@ func (s *Service) recordRound(ctx context.Context, app application.Application, 
 		return s.apps.UpdateRound(ctx, r.ID, patch, actorID)
 	}
 	return s.apps.ScheduleRound(ctx, app.ID, input, actorID)
+}
+
+// taskDue 把邮件里的截止日期变成任务这一轮的 DDL，不适用时返回 nil。
+//
+// 只在任务阶段（在线测评这类）上做这件事：别的阶段的「截止日期」是投递
+// 截止之类的背景信息，塞进 scheduled_at 会让它冒充成一场面试。
+// 邮件通常只说到「哪天之前」，所以取那天的 23:59——用零点的话，
+// 「28 号截止」在 27 号晚上就成了已过期。
+func taskDue(in DraftRound, kind workflow.Kind) *time.Time {
+	if kind != workflow.KindTask || in.ScheduledAt != nil || in.Deadline == "" {
+		return nil
+	}
+	day, err := time.ParseInLocation("2006-01-02", in.Deadline, time.Local)
+	if err != nil {
+		return nil
+	}
+	due := day.Add(23*time.Hour + 59*time.Minute)
+	return &due
 }
 
 // setIfFilled 把非空值挂到「传了就改」的可选字段上。
