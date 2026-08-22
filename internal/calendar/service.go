@@ -13,6 +13,18 @@ import (
 // DefaultWindowDays 是日程页默认的时间窗：一周。
 const DefaultWindowDays = 7
 
+// StartOfWeek 返回 t 所在那一周的周日零点。
+//
+// 日程页固定按自然周显示：一周七天、周日打头。从「今天」起算七天也能凑够
+// 一周，但那样每天的列都在漂移，翻页之后「周三在第几列」全靠数——
+// 对齐到自然周，位置才是稳定的锚点。
+func StartOfWeek(t time.Time) time.Time {
+	local := t.Local()
+	y, m, d := local.Date()
+	day := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	return day.AddDate(0, 0, -int(day.Weekday()))
+}
+
 // RoundStore 是本模块对面试轮次的最小依赖。
 type RoundStore interface {
 	// UpcomingRounds 返回时间窗内已排期的面试（跨看板）。

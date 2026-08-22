@@ -12,8 +12,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"interview/internal/calendar"
 	"interview/internal/gcal"
 )
+
+// thisWeekAt 返回本周第 weekday 天（0 = 周日）的 hour 点整。
+//
+// 日程页按自然周显示，测试数据必须落在当前这一周里：用「明天」的话，
+// 今天是周六时明天就已经是下一周，那条记录会掉出时间窗，
+// 测试跟着周几随机红——这种失败最难查。
+func thisWeekAt(weekday, hour int) time.Time {
+	return calendar.StartOfWeek(time.Now()).
+		AddDate(0, 0, weekday).
+		Add(time.Duration(hour) * time.Hour)
+}
 
 // googleStub 是一个假的 Google 端点：token / userinfo / events 都在这里应付掉，
 // 不打真网络，也不需要真凭证。
@@ -260,9 +272,8 @@ func TestCalendarFailureDoesNotBlockScheduling(t *testing.T) {
 func TestAgendaMergesBothSources(t *testing.T) {
 	r, stub := setupGoogle(t)
 
-	// 明天 14:00 的面试。
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	at := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 14, 0, 0, 0, time.Local)
+	// 本周三 14:00 的面试。
+	at := thisWeekAt(3, 14)
 
 	code, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
 		map[string]any{"company": "时间线公司", "owner_id": 1, "stage_key": "round_1"})
@@ -338,8 +349,7 @@ func TestAgendaMergesBothSources(t *testing.T) {
 func TestAgendaSurvivesGoogleFailure(t *testing.T) {
 	r, stub := setupGoogle(t)
 
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	at := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 10, 0, 0, 0, time.Local)
+	at := thisWeekAt(3, 10)
 
 	_, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
 		map[string]any{"company": "降级公司", "owner_id": 1, "stage_key": "round_1"})
@@ -376,6 +386,19 @@ func TestAgendaWithoutGoogle(t *testing.T) {
 	// 种子里有两条已排期的面试，日程页要能看到它们（时间窗内的部分）。
 	if body["unscheduled"] == nil {
 		t.Fatalf("待安排列表字段应当存在：%v", body)
+	}
+
+	// 不传 from 时按自然周返回：七天，周日打头。
+	// 从「今天」起算也能凑够七天，但那样每天的列会随今天是周几而漂移。
+	days := body["days"].([]any)
+	if len(days) != 7 {
+		t.Fatalf("默认该返回一整周，实际 %d 天", len(days))
+	}
+	if first := days[0].(map[string]any); first["weekday"] != "周日" {
+		t.Fatalf("第一天该是周日，实际 %v（%v）", first["weekday"], first["date"])
+	}
+	if last := days[6].(map[string]any); last["weekday"] != "周六" {
+		t.Fatalf("最后一天该是周六，实际 %v（%v）", last["weekday"], last["date"])
 	}
 }
 

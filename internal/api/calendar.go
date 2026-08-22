@@ -103,13 +103,14 @@ func (h *Handler) GetAgenda(c *gin.Context) {
 }
 
 // Agenda 组装日程页数据，页面与接口共用。
-// from 缺省是今天，days 缺省一周。
+// from 缺省是本周周日（日程页按自然周显示），days 缺省一周。
+// 显式传了 from 就以它为准，不再对齐——接口调用方可能就是要从某天起算。
 func (h *Handler) Agenda(c *gin.Context) (calendar.Agenda, error) {
 	if h.Calendar == nil {
 		return calendar.Agenda{}, apperr.Unavailable(apperr.CodeGoogleNotConnected, "日程功能未启用")
 	}
 
-	from := time.Now()
+	from := calendar.StartOfWeek(time.Now())
 	if raw := c.Query("from"); raw != "" {
 		parsed, err := time.ParseInLocation("2006-01-02", raw, time.Local)
 		if err != nil {

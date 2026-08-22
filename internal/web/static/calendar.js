@@ -21,13 +21,21 @@
   const MODES = { online: '线上', onsite: '现场', phone: '电话' };
   const RESULTS = { pending: '待进行', passed: '已通过', failed: '未通过', cancelled: '已取消' };
 
-  // 时间小工具。这几个必须定义在下面的 `let from = todayISO()` 之前——
+  // 时间小工具。这几个必须定义在下面的 `let from = thisWeekISO()` 之前——
   // const 声明有暂时性死区，函数声明虽然会提升，但它引用的 pad 不会。
   const pad = (n) => String(n).padStart(2, '0');
 
   const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-  const todayISO = () => ymd(new Date());
+  // 日程页固定按自然周显示，周日打头。翻页翻的是整周，
+  // 这样「周三在第几列」永远是同一个位置，不随今天是周几而漂移。
+  const weekStart = (d) => {
+    const start = new Date(d);
+    start.setDate(start.getDate() - start.getDay());
+    return ymd(start);
+  };
+
+  const thisWeekISO = () => weekStart(new Date());
 
   const hhmm = (iso) => {
     const d = new Date(iso);
@@ -35,7 +43,7 @@
   };
 
   // 视图状态：起始日 + 天数。默认一周，从今天开始。
-  let from = todayISO();
+  let from = thisWeekISO();
   let days = 7;
 
   // ---------- 渲染 ----------
@@ -268,7 +276,7 @@
   function shift(offset) {
     const d = new Date(from + 'T00:00:00');
     d.setDate(d.getDate() + offset);
-    from = ymd(d);
+    from = weekStart(d); // 保险起见再对齐一次：起点永远落在周日
     reload();
   }
 
@@ -276,7 +284,7 @@
     btn.addEventListener('click', () => shift(Number(btn.dataset.shift)));
   });
   document.querySelector('[data-today]').addEventListener('click', () => {
-    from = todayISO();
+    from = thisWeekISO();
     reload();
   });
 

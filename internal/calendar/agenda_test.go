@@ -72,3 +72,25 @@ func TestMarkConflictsIgnoresTasks(t *testing.T) {
 		}
 	}
 }
+
+// 日程页按自然周显示：不管今天周几，起点都是那一周的周日零点。
+func TestStartOfWeek(t *testing.T) {
+	cases := []struct {
+		name string
+		at   time.Time
+		want time.Time
+	}{
+		{"周六", time.Date(2026, 8, 22, 16, 40, 0, 0, time.Local), time.Date(2026, 8, 16, 0, 0, 0, 0, time.Local)},
+		{"周日当天", time.Date(2026, 8, 23, 0, 30, 0, 0, time.Local), time.Date(2026, 8, 23, 0, 0, 0, 0, time.Local)},
+		{"周三", time.Date(2026, 8, 26, 23, 59, 0, 0, time.Local), time.Date(2026, 8, 23, 0, 0, 0, 0, time.Local)},
+		// 跨月：8 月 1 日是周六，那一周从 7 月 26 日开始。
+		{"跨月", time.Date(2026, 8, 1, 9, 0, 0, 0, time.Local), time.Date(2026, 7, 26, 0, 0, 0, 0, time.Local)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StartOfWeek(c.at); !got.Equal(c.want) {
+				t.Fatalf("StartOfWeek(%v) = %v，期望 %v", c.at, got, c.want)
+			}
+		})
+	}
+}
