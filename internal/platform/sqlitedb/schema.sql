@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS stages (
                    CHECK (kind IN ('normal', 'interview', 'terminal_success', 'terminal_fail')),
     color          TEXT    NOT NULL DEFAULT '#6b7280',
     requires_owner INTEGER NOT NULL DEFAULT 0,
+    -- skippable: 这一列允许被跨过去。中间隔着的列全部可跳过时，才准跨阶段流转。
+    skippable      INTEGER NOT NULL DEFAULT 0,
     position       REAL    NOT NULL,
     created_at     TEXT    NOT NULL,
     UNIQUE (board_id, key)

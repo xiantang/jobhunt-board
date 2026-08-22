@@ -18,6 +18,7 @@ type Stage struct {
 	KindLabel     string        `json:"kind_label"`
 	Color         string        `json:"color"`
 	RequiresOwner bool          `json:"requires_owner"`
+	Skippable     bool          `json:"skippable"` // 允许被跨过去
 	Position      float64       `json:"-"`
 }
 
@@ -27,6 +28,7 @@ type CreateInput struct {
 	Kind          string
 	Color         string
 	RequiresOwner bool
+	Skippable     bool
 	Index         int // 插入到第几列，< 0 表示插到终态阶段之前
 }
 
@@ -36,6 +38,7 @@ type UpdateInput struct {
 	Kind          *string
 	Color         *string
 	RequiresOwner *bool
+	Skippable     *bool
 }
 
 // Flow 把阶段列表转成流转规则。列表必须已按 position 排好序。
@@ -47,6 +50,7 @@ func Flow(stages []Stage) workflow.Flow {
 			Label:         s.Label,
 			Kind:          s.Kind,
 			RequiresOwner: s.RequiresOwner,
+			Skippable:     s.Skippable,
 		})
 	}
 	return workflow.NewFlow(out)

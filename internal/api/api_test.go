@@ -185,6 +185,55 @@ func TestDuplicateApplicationReturns409(t *testing.T) {
 	}
 }
 
+func TestSkipStageTransition(t *testing.T) {
+	r := setup(t)
+
+	// 种子配置里「在线测评」标了可跳过，所以 HR screen 能直达一面。
+	code, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "跳测评公司", "owner_id": 1})
+	if code != http.StatusCreated {
+		t.Fatalf("创建返回 %d：%v", code, body)
+	}
+	id := strconv.Itoa(int(body["application"].(map[string]any)["id"].(float64)))
+
+	code, body = do(t, r, http.MethodPatch, "/api/applications/"+id+"/stage", map[string]any{"to": "round_1"})
+	if code != http.StatusOK {
+		t.Fatalf("跳过在线测评返回 %d：%v", code, body)
+	}
+	if got := body["application"].(map[string]any)["stage_key"]; got != "round_1" {
+		t.Fatalf("阶段 = %v，期望 round_1", got)
+	}
+
+	// 把「在线测评」的可跳过关掉，同样的流转就该被拦住。
+	_, listed := do(t, r, http.MethodGet, "/api/boards/JOBHUNT/stages", nil)
+	var testID string
+	for _, x := range listed["stages"].([]any) {
+		st := x.(map[string]any)
+		if st["key"] == "online_test" {
+			if st["skippable"] != true {
+				t.Fatalf("种子里「在线测评」应当是可跳过的：%v", st)
+			}
+			testID = strconv.Itoa(int(st["id"].(float64)))
+		}
+	}
+	if code, body = do(t, r, http.MethodPatch, "/api/stages/"+testID,
+		map[string]any{"skippable": false}); code != http.StatusOK {
+		t.Fatalf("关闭可跳过返回 %d：%v", code, body)
+	}
+
+	code, body = do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "老实排队公司", "owner_id": 1})
+	if code != http.StatusCreated {
+		t.Fatalf("创建返回 %d：%v", code, body)
+	}
+	id = strconv.Itoa(int(body["application"].(map[string]any)["id"].(float64)))
+
+	code, body = do(t, r, http.MethodPatch, "/api/applications/"+id+"/stage", map[string]any{"to": "round_1"})
+	if code != http.StatusConflict || errCode(t, body) != "INVALID_TRANSITION" {
+		t.Fatalf("关掉可跳过后状态码 = %d，body = %v", code, body)
+	}
+}
+
 func TestInvalidTransitionReturns409(t *testing.T) {
 	r := setup(t)
 	// 种子数据里 JOBHUNT-2 停在「在线测评」，直接跳三面属于跨阶段。

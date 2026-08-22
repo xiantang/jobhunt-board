@@ -44,10 +44,35 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate 执行幂等的建表语句。
+// Migrate 执行幂等的建表语句，再补上建表之后新增的列。
 func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("初始化表结构失败: %w", err)
+	}
+	// CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，旧库要单独补。
+	if err := addColumn(db, "stages", "skippable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// addColumn 幂等地给表加一列：列已存在就跳过。
+func addColumn(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
+	if err != nil {
+		return fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
+	}
+	exists := rows.Next()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
+	}
+	rows.Close()
+	if exists {
+		return nil
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
+		return fmt.Errorf("给 %s 添加 %s 列失败: %w", table, column, err)
 	}
 	return nil
 }
@@ -57,17 +82,19 @@ func Migrate(db *sql.DB) error {
 var defaultStages = []struct {
 	key, label, kind, color string
 	requiresOwner           bool
+	skippable               bool
 }{
-	{"hr_screen", "HR screen", "normal", "#64748b", false},
-	{"online_test", "在线测评", "normal", "#0891b2", false},
-	{"round_1", "一面", "interview", "#2563eb", true},
-	{"round_2", "二面", "interview", "#4f46e5", false},
-	{"round_3", "三面", "interview", "#7c3aed", false},
-	{"round_4", "四面", "interview", "#a21caf", false},
-	{"hrbp", "HRBP 面", "interview", "#db2777", false},
-	{"offer_wait", "Offer 审批中", "normal", "#d97706", false},
-	{"offer", "已发 Offer", "terminal_success", "#16a34a", false},
-	{"rejected", "已结束", "terminal_fail", "#6b7280", false},
+	{"hr_screen", "HR screen", "normal", "#64748b", false, false},
+	// 不是每家公司都有在线测评，默认可跳过：HR screen 能直达一面。
+	{"online_test", "在线测评", "normal", "#0891b2", false, true},
+	{"round_1", "一面", "interview", "#2563eb", true, false},
+	{"round_2", "二面", "interview", "#4f46e5", false, false},
+	{"round_3", "三面", "interview", "#7c3aed", false, false},
+	{"round_4", "四面", "interview", "#a21caf", false, true},
+	{"hrbp", "HRBP 面", "interview", "#db2777", false, true},
+	{"offer_wait", "Offer 审批中", "normal", "#d97706", false, false},
+	{"offer", "已发 Offer", "terminal_success", "#16a34a", false, false},
+	{"rejected", "已结束", "terminal_fail", "#6b7280", false, false},
 }
 
 // Seed 仅在库为空时写入演示数据：一个看板、十个阶段、三名成员、五条面试流程。
@@ -97,14 +124,18 @@ func Seed(db *sql.DB) error {
 	boardID, _ := res.LastInsertId()
 
 	for i, s := range defaultStages {
-		requires := 0
+		requires, skippable := 0, 0
 		if s.requiresOwner {
 			requires = 1
 		}
+		if s.skippable {
+			skippable = 1
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO stages (board_id, key, label, kind, color, requires_owner, position, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			boardID, s.key, s.label, s.kind, s.color, requires, float64((i+1)*1000), nowStr); err != nil {
+			INSERT INTO stages (board_id, key, label, kind, color, requires_owner, skippable, position, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			boardID, s.key, s.label, s.kind, s.color, requires, skippable,
+			float64((i+1)*1000), nowStr); err != nil {
 			return fmt.Errorf("写入种子阶段失败: %w", err)
 		}
 	}

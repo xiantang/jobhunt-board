@@ -58,6 +58,7 @@ type Stage struct {
 	Kind          Kind   `json:"kind"`
 	Position      int    `json:"position"` // 在看板中的序号，0 起
 	RequiresOwner bool   `json:"requires_owner"`
+	Skippable     bool   `json:"skippable"` // 允许被跨过去，例如没有在线测评的公司
 }
 
 // Flow 是某个看板的一套阶段流转规则。零值不可用，必须经 NewFlow 构造。
@@ -111,7 +112,8 @@ func (f Flow) Parse(raw string) (Stage, error) {
 //  1. 同阶段视为合法（只是调整卡片排序）
 //  2. 任何阶段都可以直达终态——随时可能拿到 Offer 或被挂
 //  3. 终态可以退回任意非终态——用来撤销误标
-//  4. 其余只允许相邻阶段进/退一格，禁止跨阶段跳跃
+//  4. 其余按列顺序走：相邻当然可以，跨得更远则要求
+//     中间隔着的每一列都标了「可跳过」（例如这家公司没有在线测评）
 func (f Flow) Can(from, to Stage) bool {
 	switch {
 	case from.Key == to.Key:
@@ -121,8 +123,23 @@ func (f Flow) Can(from, to Stage) bool {
 	case from.Kind.Terminal():
 		return true
 	default:
-		return abs(to.Position-from.Position) == 1
+		return f.betweenSkippable(from.Position, to.Position)
 	}
+}
+
+// betweenSkippable 判断两列之间夹着的列是否全部可跳过。
+// 相邻时中间没有列，自然为真；进退两个方向一视同仁。
+func (f Flow) betweenSkippable(a, b int) bool {
+	lo, hi := a, b
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	for i := lo + 1; i < hi; i++ {
+		if !f.stages[i].Skippable {
+			return false
+		}
+	}
+	return true
 }
 
 // Next 返回某阶段可流转到的阶段列表，供前端渲染按钮。
@@ -149,11 +166,4 @@ func (f Flow) Validate(from, to Stage, hasOwner bool) error {
 			fmt.Sprintf("「%s」要求先指定跟进人", to.Label))
 	}
 	return nil
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }

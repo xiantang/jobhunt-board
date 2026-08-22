@@ -65,7 +65,8 @@ type BoardColumn struct {
 	KindLabel     string                    `json:"kind_label"`
 	Color         string                    `json:"color"`
 	RequiresOwner bool                      `json:"requires_owner"`
-	IsEntry       bool                      `json:"is_entry"` // 第一列，新流程从这里进
+	Skippable     bool                      `json:"skippable"` // 可以被跨过去
+	IsEntry       bool                      `json:"is_entry"`  // 第一列，新流程从这里进
 	Terminal      bool                      `json:"terminal"`
 	Count         int                       `json:"count"`
 	Applications  []application.Application `json:"applications"`
@@ -110,6 +111,7 @@ func (h *Handler) Board(c *gin.Context, key string, f application.Filter) (Board
 			KindLabel:     st.KindLabel,
 			Color:         st.Color,
 			RequiresOwner: st.RequiresOwner,
+			Skippable:     st.Skippable,
 			IsEntry:       i == 0,
 			Terminal:      st.Kind.Terminal(),
 			Applications:  []application.Application{},
@@ -203,6 +205,7 @@ type CreateStageReq struct {
 	Kind          string `json:"kind"           binding:"omitempty,oneof=normal interview terminal_success terminal_fail"`
 	Color         string `json:"color"          binding:"omitempty,max=20"`
 	RequiresOwner bool   `json:"requires_owner"`
+	Skippable     bool   `json:"skippable"`
 	Index         *int   `json:"index"` // 插到第几列，缺省插到终态阶段之前
 }
 
@@ -227,6 +230,7 @@ func (h *Handler) CreateStage(c *gin.Context) {
 		Kind:          req.Kind,
 		Color:         req.Color,
 		RequiresOwner: req.RequiresOwner,
+		Skippable:     req.Skippable,
 		Index:         index,
 	})
 	if err != nil {
@@ -242,9 +246,10 @@ type UpdateStageReq struct {
 	Kind          *string `json:"kind"           binding:"omitempty,oneof=normal interview terminal_success terminal_fail"`
 	Color         *string `json:"color"          binding:"omitempty,max=20"`
 	RequiresOwner *bool   `json:"requires_owner"`
+	Skippable     *bool   `json:"skippable"`
 }
 
-// UpdateStage 改阶段的展示名 / 类型 / 颜色 / 跟进人要求。key 不变，卡片不受影响。
+// UpdateStage 改阶段的展示名 / 类型 / 颜色 / 跟进人要求 / 是否可跳过。key 不变，卡片不受影响。
 func (h *Handler) UpdateStage(c *gin.Context) {
 	id, err := ginx.PathID(c, "id")
 	if err != nil {
@@ -261,6 +266,7 @@ func (h *Handler) UpdateStage(c *gin.Context) {
 		Kind:          req.Kind,
 		Color:         req.Color,
 		RequiresOwner: req.RequiresOwner,
+		Skippable:     req.Skippable,
 	})
 	if err != nil {
 		ginx.Fail(c, err)

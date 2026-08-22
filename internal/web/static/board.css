@@ -261,6 +261,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .stage-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* 一行放不下两个开关时换行，别把按钮挤出抽屉 */
   gap: 6px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);

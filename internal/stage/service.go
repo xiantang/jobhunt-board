@@ -22,21 +22,24 @@ type Service struct {
 func NewService(db *sql.DB) *Service { return &Service{db: db} }
 
 const selectStage = `
-SELECT id, board_id, key, label, kind, color, requires_owner, position
+SELECT id, board_id, key, label, kind, color, requires_owner, skippable, position
 FROM stages`
 
 func scanStage(sc interface{ Scan(...any) error }) (Stage, error) {
 	var (
-		s        Stage
-		kind     string
-		requires int
+		s         Stage
+		kind      string
+		requires  int
+		skippable int
 	)
-	if err := sc.Scan(&s.ID, &s.BoardID, &s.Key, &s.Label, &kind, &s.Color, &requires, &s.Position); err != nil {
+	if err := sc.Scan(&s.ID, &s.BoardID, &s.Key, &s.Label, &kind, &s.Color,
+		&requires, &skippable, &s.Position); err != nil {
 		return Stage{}, err
 	}
 	s.Kind = workflow.Kind(kind)
 	s.KindLabel = workflow.KindLabel(s.Kind)
 	s.RequiresOwner = requires == 1
+	s.Skippable = skippable == 1
 	return s, nil
 }
 
@@ -132,9 +135,9 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput) (St
 	key := uniqueKey(slug(label), existing)
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO stages (board_id, key, label, kind, color, requires_owner, position, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		boardID, key, label, string(kind), color, boolToInt(in.RequiresOwner),
+		INSERT INTO stages (board_id, key, label, kind, color, requires_owner, skippable, position, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		boardID, key, label, string(kind), color, boolToInt(in.RequiresOwner), boolToInt(in.Skippable),
 		ordering.At(positions, index), now)
 	if err != nil {
 		return Stage{}, apperr.Internal(err)
@@ -189,6 +192,10 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput) (Stage, 
 	if in.RequiresOwner != nil && *in.RequiresOwner != current.RequiresOwner {
 		sets = append(sets, "requires_owner = ?")
 		args = append(args, boolToInt(*in.RequiresOwner))
+	}
+	if in.Skippable != nil && *in.Skippable != current.Skippable {
+		sets = append(sets, "skippable = ?")
+		args = append(args, boolToInt(*in.Skippable))
 	}
 
 	if len(sets) == 0 {

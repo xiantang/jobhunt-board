@@ -26,7 +26,7 @@
 
   function toStage(col) {
     return { key: col.key, label: col.label, kind: col.kind, color: col.color, id: col.id,
-             requires_owner: col.requires_owner, terminal: col.terminal };
+             requires_owner: col.requires_owner, skippable: col.skippable, terminal: col.terminal };
   }
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -42,7 +42,12 @@
     const to = STAGES[stageIndex(toKey)];
     if (!from || !to) return false;
     if (to.terminal || from.terminal) return true;
-    return Math.abs(stageIndex(toKey) - stageIndex(fromKey)) === 1;
+    // 相邻当然可以；跨得更远则要求中间隔着的列全部「可跳过」。
+    const [lo, hi] = [stageIndex(fromKey), stageIndex(toKey)].sort((a, b) => a - b);
+    for (let i = lo + 1; i < hi; i += 1) {
+      if (!STAGES[i].skippable) return false;
+    }
+    return true;
   }
 
   // ---------- 渲染 ----------
@@ -437,6 +442,9 @@
       <select data-field="kind">${options(KINDS.map((k) => [k.value, k.label]), s.kind)}</select>
       <label class="stage-row__flag" title="进入该阶段前必须先指定跟进人">
         <input type="checkbox" data-field="requires_owner"${s.requires_owner ? ' checked' : ''}> 需跟进人
+      </label>
+      <label class="stage-row__flag" title="允许卡片跨过这一列，例如这家公司没有在线测评">
+        <input type="checkbox" data-field="skippable"${s.skippable ? ' checked' : ''}> 可跳过
       </label>
       <button type="button" class="btn btn--tiny" data-shift="-1"${i === 0 ? ' disabled' : ''}>↑</button>
       <button type="button" class="btn btn--tiny" data-shift="1"${i === total - 1 ? ' disabled' : ''}>↓</button>
