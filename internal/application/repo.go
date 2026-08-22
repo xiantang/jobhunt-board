@@ -445,11 +445,19 @@ func (r *repo) upcomingRounds(ctx context.Context, from, to time.Time) ([]Schedu
 		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
 }
 
-// unscheduledRounds 返回还没定时间的待进行面试，日程页单独列出来提醒。
+// unscheduledRounds 返回还没定时间、并且还有可能发生的面试。
+//
+// 卡片已经走到终态（拿到 Offer 或已结束）时，它下面挂着的待安排轮次
+// 不会再发生了——那是流程中断留下的残影，不该出现在「还没定时间」里催人去约。
+// 卡片当前阶段用 LEFT JOIN 取：阶段被删掉时 kind 为 NULL，按「还在推进」处理，
+// 宁可多显示一条，也不要把还要跟的面试藏起来。
 func (r *repo) unscheduledRounds(ctx context.Context) ([]ScheduledRound, error) {
 	return r.scheduledRounds(ctx, `
+		LEFT JOIN stages cur ON cur.board_id = a.board_id AND cur.key = a.stage_key
 		WHERE r.scheduled_at IS NULL AND r.result = 'pending'
-		ORDER BY a.updated_at DESC`)
+		  AND (cur.kind IS NULL OR cur.kind NOT IN (?, ?))
+		ORDER BY a.updated_at DESC`,
+		string(workflow.KindOffer), string(workflow.KindRejected))
 }
 
 // scheduledRound 按轮次 id 取一条，用来拼日程标题。

@@ -409,3 +409,56 @@ func findDayEntries(t *testing.T, days []any, date string) []any {
 	t.Fatalf("日程里没有 %s 这一天", date)
 	return nil
 }
+
+// 卡片已经走到终态时，它下面挂着的待安排轮次不会再发生了，
+// 不该继续出现在「还没定时间」里催人去约。
+func TestAgendaHidesUnscheduledOnEndedApplications(t *testing.T) {
+	r := setup(t)
+
+	// 一张还在推进的卡：待安排的一面应当显示。
+	code, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "推进中公司", "owner_id": 1, "stage_key": "round_1"})
+	if code != http.StatusCreated {
+		t.Fatalf("建卡返回 %d：%v", code, body)
+	}
+
+	// 另一张：同样有待安排的一面，但流程已经结束。
+	code, body = do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "已结束公司", "owner_id": 1, "stage_key": "round_1"})
+	if code != http.StatusCreated {
+		t.Fatalf("建卡返回 %d：%v", code, body)
+	}
+	endedID := strconv.Itoa(int(body["application"].(map[string]any)["id"].(float64)))
+	if code, body = do(t, r, http.MethodPatch, "/api/applications/"+endedID+"/stage",
+		map[string]any{"to": "rejected"}); code != http.StatusOK {
+		t.Fatalf("流转到已结束返回 %d：%v", code, body)
+	}
+
+	// 拿到 Offer 也是终态，同样不该再催。
+	code, body = do(t, r, http.MethodPost, "/api/boards/JOBHUNT/applications",
+		map[string]any{"company": "拿到 Offer 公司", "owner_id": 1, "stage_key": "round_1"})
+	if code != http.StatusCreated {
+		t.Fatalf("建卡返回 %d：%v", code, body)
+	}
+	offerID := strconv.Itoa(int(body["application"].(map[string]any)["id"].(float64)))
+	if code, body = do(t, r, http.MethodPatch, "/api/applications/"+offerID+"/stage",
+		map[string]any{"to": "offer"}); code != http.StatusOK {
+		t.Fatalf("流转到已发 Offer 返回 %d：%v", code, body)
+	}
+
+	_, body = do(t, r, http.MethodGet, "/api/agenda", nil)
+	titles := make([]string, 0, 4)
+	for _, raw := range body["unscheduled"].([]any) {
+		titles = append(titles, raw.(map[string]any)["title"].(string))
+	}
+	joined := strings.Join(titles, " / ")
+
+	if !strings.Contains(joined, "推进中公司") {
+		t.Fatalf("还在推进的卡片该继续提醒：%s", joined)
+	}
+	for _, gone := range []string{"已结束公司", "拿到 Offer 公司"} {
+		if strings.Contains(joined, gone) {
+			t.Fatalf("走到终态的卡片不该再出现在「还没定时间」里：%s", joined)
+		}
+	}
+}
