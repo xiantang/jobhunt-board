@@ -80,7 +80,7 @@
 
     const round = app.next_round
       ? `<p class="card__round${overdue(app.next_round) ? ' card__round--overdue' : ''}">
-           <span>📅 ${esc(whenText(app.next_round.scheduled_at))}</span>
+           <span>${isTask(app.next_round) ? '⏰' : '📅'} ${esc(whenText(app.next_round.scheduled_at, isTask(app.next_round)))}</span>
            <span class="card__meeting">${esc(meetingText(app.next_round))}</span>
          </p>`
       : '';
@@ -305,6 +305,10 @@
       drawerForm.owner_id.value = String(app.owner_id || 0);
       drawerForm.intent.value = app.intent;
 
+      // 停在任务列（在线测评）时，加的是一条任务而不是一场面试，按钮跟着改口。
+      document.getElementById('add-round').textContent =
+        app.stage_kind === 'task' ? '+ 新增一条测评' : '+ 安排面试';
+
       renderRounds(data.rounds);
       document.getElementById('drawer-events').innerHTML = data.events
         .map((ev) => `<li>${esc(ev.text)}<time>${new Date(ev.created_at).toLocaleString('zh-CN')}</time></li>`)
@@ -358,14 +362,18 @@
   const options = (pairs, current) => pairs
     .map(([v, l]) => `<option value="${v}"${v === current ? ' selected' : ''}>${l}</option>`).join('');
 
+  const isTask = (r) => r.kind === 'task';
+
+  // 任务（在线测评）没有时长、方式、地点、面试官这些东西——
+  // 摆出来只会让人以为需要填。它要的就两样：什么时候截止，从哪儿进去做。
   function roundHTML(r) {
-    return `<div class="round${overdue(r) ? ' round--overdue' : ''}" data-round="${r.id}">
-      <div class="round__head">
-        <b>${esc(r.stage_label)}</b>
-        <select data-field="result">${options(RESULTS, r.result)}</select>
-        <button type="button" class="btn btn--tiny btn--danger" data-del-round>删除</button>
-      </div>
-      <div class="round__row">
+    const task = isTask(r);
+    const body = task
+      ? `<div class="round__row">
+        <label>截止时间<input type="datetime-local" data-field="scheduled_at" value="${toLocalInput(r.scheduled_at)}"></label>
+        <label>测评链接<input type="url" data-field="meeting_url" placeholder="https://…" value="${esc(r.meeting_url)}"></label>
+      </div>`
+      : `<div class="round__row">
         <label>面试时间<input type="datetime-local" data-field="scheduled_at" value="${toLocalInput(r.scheduled_at)}"></label>
         <label>时长（分钟）<input type="number" data-field="duration_min" min="5" max="600" value="${r.duration_min}"></label>
         <label>方式<select data-field="mode">${options(MODES, r.mode)}</select></label>
@@ -374,8 +382,16 @@
         <label>会议链接<input type="url" data-field="meeting_url" placeholder="https://…" value="${esc(r.meeting_url)}"></label>
         <label>地点 / 会议室<input type="text" data-field="meeting_place" maxlength="120" value="${esc(r.meeting_place)}"></label>
         <label>面试官<input type="text" data-field="interviewer" maxlength="60" value="${esc(r.interviewer)}"></label>
+      </div>`;
+
+    return `<div class="round${task ? ' round--task' : ''}${overdue(r) ? ' round--overdue' : ''}" data-round="${r.id}">
+      <div class="round__head">
+        <b>${task ? '⏰ ' : ''}${esc(r.stage_label)}</b>
+        <select data-field="result">${options(RESULTS, r.result)}</select>
+        <button type="button" class="btn btn--tiny btn--danger" data-del-round>删除</button>
       </div>
-      <label>面试记录<textarea data-field="notes" rows="2" maxlength="2000">${esc(r.notes)}</textarea></label>
+      ${body}
+      <label>${task ? '备注' : '面试记录'}<textarea data-field="notes" rows="2" maxlength="2000">${esc(r.notes)}</textarea></label>
       <button type="button" class="btn btn--tiny btn--primary" data-save-round>保存这一轮</button>
     </div>`;
   }
@@ -383,7 +399,7 @@
   function renderRounds(rounds) {
     roundsEl.innerHTML = rounds.length
       ? rounds.map(roundHTML).join('')
-      : '<p class="empty">还没有面试记录，点「+ 安排面试」添加一场。</p>';
+      : '<p class="empty">还没有记录，点上面的按钮添加一条。</p>';
   }
 
   document.getElementById('add-round').addEventListener('click', async () => {
@@ -392,7 +408,8 @@
       const data = await API.post(`/api/applications/${currentAppId}/rounds${query}`, {});
       renderBoard(data.board);
       renderRounds(data.rounds);
-      API.toast('已添加一场待安排的面试', true);
+      API.toast(data.rounds.some((r) => isTask(r) && !r.scheduled_at)
+        ? '已添加一条待填截止时间的记录' : '已添加一场待安排的面试', true);
       warnCalendar(data);
     } catch (err) {
       API.toast(err.message);
@@ -406,8 +423,15 @@
 
     if (e.target.closest('[data-save-round]')) {
       const field = (name) => row.querySelector(`[data-field="${name}"]`);
+      const task = row.classList.contains('round--task');
       try {
-        const data = await API.patch(`/api/rounds/${id}${query}`, {
+        // 任务那几个字段根本没渲染出来，只送它有的东西。
+        const payload = task ? {
+          scheduled_at: toRFC3339(field('scheduled_at').value),
+          meeting_url: field('meeting_url').value.trim(),
+          result: field('result').value,
+          notes: field('notes').value,
+        } : {
           scheduled_at: toRFC3339(field('scheduled_at').value),
           duration_min: Number(field('duration_min').value),
           mode: field('mode').value,
@@ -416,10 +440,11 @@
           interviewer: field('interviewer').value.trim(),
           result: field('result').value,
           notes: field('notes').value,
-        });
+        };
+        const data = await API.patch(`/api/rounds/${id}${query}`, payload);
         renderBoard(data.board);
         renderRounds(data.rounds);
-        API.toast('面试信息已保存', true);
+        API.toast(task ? '测评信息已保存' : '面试信息已保存', true);
         warnCalendar(data);
       } catch (err) {
         API.toast(err.message);
@@ -588,6 +613,25 @@
       confirmForm.stage_key.value = selected || '';
     }
 
+    // 草稿要落到哪一列：显式选了就是它，选了「不改变阶段」就是卡片当前那列。
+    function draftStageKind(d) {
+      const key = confirmForm.stage_key.value || (d && d.match ? d.match.stage_key : '');
+      const st = STAGES.find((s) => s.key === key);
+      return st ? st.kind : '';
+    }
+
+    // 任务阶段（在线测评）只有截止时间和一条链接——时长、方式、地点、面试官
+    // 都不适用。留在表单上只会让人以为需要填，填了也会被后端丢掉。
+    function applyRoundShape(d) {
+      const task = draftStageKind(d) === 'task';
+      document.getElementById('ingest-time-label').textContent = task ? '截止时间' : '时间';
+      document.getElementById('ingest-link-label').textContent = task ? '测评链接' : '链接';
+      for (const id of ['ingest-duration', 'ingest-mode', 'ingest-place', 'ingest-interviewer']) {
+        document.getElementById(id).hidden = task;
+      }
+      return task;
+    }
+
     function renderDraft(d) {
       matchedId = d.match ? d.match.id : 0;
 
@@ -613,7 +657,12 @@
 
       const r = d.round || {};
       confirmForm.create_round.checked = true;
-      confirmForm.scheduled_at.value = toLocalInput(r.scheduled_at);
+      const task = applyRoundShape(d);
+      // 邮件里的「链接有效期至 2026-08-28」就是这一轮的 DDL。取当天 23:59：
+      // 零点会让「28 号截止」在 27 号晚上就变成已过期。
+      confirmForm.scheduled_at.value = (task && !r.scheduled_at && r.deadline)
+        ? `${r.deadline}T23:59`
+        : toLocalInput(r.scheduled_at);
       confirmForm.duration_min.value = r.duration_min || '';
       confirmForm.mode.value = r.mode || 'online';
       confirmForm.meeting_url.value = r.meeting_url || '';
@@ -621,6 +670,8 @@
       confirmForm.interviewer.value = r.interviewer || '';
       confirmForm.round_notes.value = r.notes || '';
       syncRoundBox();
+      // 用户改选别的阶段时，表单形态跟着变。
+      confirmForm.stage_key.onchange = () => applyRoundShape(d);
 
       parseForm.hidden = true;
       draftEl.hidden = false;
@@ -656,7 +707,8 @@
       }
       const owner = Number(confirmForm.owner_id.value);
       const withRound = confirmForm.create_round.checked;
-      const duration = Number(confirmForm.duration_min.value);
+      const task = document.getElementById('ingest-duration').hidden;
+      const duration = task ? 0 : Number(confirmForm.duration_min.value);
       try {
         const data = await API.post(`/api/boards/${boardKey}/ingest/confirm${query}`, {
           application_id: matchedId,
@@ -670,10 +722,10 @@
           create_round: withRound,
           scheduled_at: withRound ? toRFC3339(confirmForm.scheduled_at.value) : null,
           duration_min: withRound && duration > 0 ? duration : 0,
-          mode: withRound ? confirmForm.mode.value : '',
+          mode: withRound && !task ? confirmForm.mode.value : '',
           meeting_url: withRound ? confirmForm.meeting_url.value.trim() : '',
-          meeting_place: withRound ? confirmForm.meeting_place.value.trim() : '',
-          interviewer: withRound ? confirmForm.interviewer.value.trim() : '',
+          meeting_place: withRound && !task ? confirmForm.meeting_place.value.trim() : '',
+          interviewer: withRound && !task ? confirmForm.interviewer.value.trim() : '',
           round_notes: withRound ? confirmForm.round_notes.value.trim() : '',
         });
         renderBoard(data.board);
@@ -691,13 +743,15 @@
 
   // ---------- 时间与文案小工具 ----------
 
-  function whenText(iso) {
-    if (!iso) return '待安排';
+  function whenText(iso, task) {
+    if (!iso) return task ? '待定 DDL' : '待安排';
     const d = new Date(iso);
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const when = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return task ? when + ' 截止' : when;
   }
 
   function meetingText(r) {
+    if (isTask(r)) return r.meeting_url ? '测评链接' : '在线测评';
     if (r.meeting_place) return r.meeting_place;
     if (r.meeting_url) return '线上会议';
     return (MODES.find(([v]) => v === r.mode) || [, '线上'])[1];
@@ -705,7 +759,8 @@
 
   const overdue = (r) => r.result === 'pending' && r.scheduled_at && new Date(r.scheduled_at) < new Date();
 
-  const needsSchedule = (app) => app.stage_kind === 'interview' &&
+  // 面试没约上、测评没填 DDL，都得催——卡片上给个提醒角标。
+  const needsSchedule = (app) => (app.stage_kind === 'interview' || app.stage_kind === 'task') &&
     (!app.next_round || !app.next_round.scheduled_at);
 
   const pad = (n) => String(n).padStart(2, '0');

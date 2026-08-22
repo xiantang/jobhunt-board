@@ -291,6 +291,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   gap: 8px;
 }
 .round--overdue { border-left-color: var(--danger); }
+/* 任务（在线测评）用虚线左边框区分：它不是一场会，只有一个截止时刻。 */
+.round--task { border-left-style: dashed; }
 .round__head { display: flex; align-items: center; gap: 8px; }
 .round__head b { flex: 1; font-size: 13px; }
 .round__head select { width: auto; }

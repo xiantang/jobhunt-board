@@ -163,7 +163,7 @@
     </form>
 
     <section class="drawer__rounds">
-      <h4>面试记录<button type="button" class="btn btn--tiny" id="add-round">+ 安排面试</button></h4>
+      <h4>面试 / 测评记录<button type="button" class="btn btn--tiny" id="add-round">+ 安排面试</button></h4>
       <div id="drawer-rounds"></div>
     </section>
 
@@ -223,9 +223,9 @@
         </label>
         <fieldset class="ingest-round" id="ingest-round">
           <div class="drawer__row">
-            <label>时间<input type="datetime-local" name="scheduled_at"></label>
-            <label>时长（分钟）<input type="number" name="duration_min" min="5" max="600"></label>
-            <label>方式
+            <label><span id="ingest-time-label">时间</span><input type="datetime-local" name="scheduled_at"></label>
+            <label id="ingest-duration">时长（分钟）<input type="number" name="duration_min" min="5" max="600"></label>
+            <label id="ingest-mode">方式
               <select name="mode">
                 <option value="online">线上</option>
                 <option value="onsite">现场</option>
@@ -234,9 +234,9 @@
             </label>
           </div>
           <div class="drawer__row">
-            <label>链接<input type="url" name="meeting_url" maxlength="300" placeholder="https://…"></label>
-            <label>地点<input type="text" name="meeting_place" maxlength="120"></label>
-            <label>面试官<input type="text" name="interviewer" maxlength="60"></label>
+            <label><span id="ingest-link-label">链接</span><input type="url" name="meeting_url" maxlength="300" placeholder="https://…"></label>
+            <label id="ingest-place">地点<input type="text" name="meeting_place" maxlength="120"></label>
+            <label id="ingest-interviewer">面试官<input type="text" name="interviewer" maxlength="60"></label>
           </div>
           <label>这一轮备注<textarea name="round_notes" rows="2" maxlength="2000"></textarea></label>
         </fieldset>

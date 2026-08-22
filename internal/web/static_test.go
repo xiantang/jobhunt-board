@@ -36,6 +36,14 @@ func TestCalendarScriptRenders(t *testing.T) {
 						"start": "2026-08-24T09:30:00+08:00", "end": "2026-08-24T10:30:00+08:00",
 						"conflict": true,
 					},
+					// 在线测评：18:00 截止，服务端把这一格算成 17:30–18:00。
+					map[string]any{
+						"source": "task", "title": "小米 · 在线测评",
+						"start": "2026-08-24T17:30:00+08:00", "end": "2026-08-24T18:00:00+08:00",
+						"due":      "2026-08-24T18:00:00+08:00",
+						"round_id": 30, "application_id": 16, "application_key": "JOBHUNT-12",
+						"stage_color": "#0891b2", "result": "pending", "synced": false,
+					},
 				},
 			},
 		},
@@ -62,6 +70,20 @@ func TestCalendarScriptRenders(t *testing.T) {
 	}
 	if !strings.Contains(html, "left:50.000%") {
 		t.Fatalf("重叠的第二场该挪到右半边：\n%s", html)
+	}
+
+	// 测评画成截止线：块底压在 18:00 上，所以 top = 17.5 × 44 = 770px。
+	// 显示的是「18:00 截止」而不是一段时间区间——DDL 不是一场会。
+	if !strings.Contains(html, "ev--task") || !strings.Contains(html, "top:770.0px") {
+		t.Fatalf("在线测评该画成 17:30 起、压在 18:00 的截止块：\n%s", html)
+	}
+	if !strings.Contains(html, "18:00 截止") {
+		t.Fatalf("测评该显示截止时刻：\n%s", html)
+	}
+	// DDL 常常压在 23:59，缩在网格最底下要滚到底才看得见，
+	// 所以顶部横条上必须再挂一次——两处都在才算数。
+	if !strings.Contains(html, "week__allday") || !strings.Contains(html, "ev--strip ev--task") {
+		t.Fatalf("测评该同时出现在顶部横条和时间轴上：\n%s", html)
 	}
 }
 

@@ -90,10 +90,12 @@
   function blockHTML(it) {
     const e = it.e;
     const google = e.source === 'google';
+    const task = e.source === 'task';
     const top = (it.start / 60) * HOUR;
     const height = Math.max(((it.end - it.start) / 60) * HOUR, MIN_BLOCK);
     const width = 100 / it.cols;
-    const time = `${hhmm(e.start)}–${hhmm(e.end)}`;
+    // 任务只有一个截止时刻：显示「18:00 截止」，而不是一段假的时间区间。
+    const time = task ? `${hhmm(e.due || e.end)} 截止` : `${hhmm(e.start)}–${hhmm(e.end)}`;
 
     // 悬停能看到全部信息——块里塞不下的都放进 title。
     const tip = [time, e.title];
@@ -102,6 +104,9 @@
     if (e.result && e.result !== 'pending') tip.push(RESULTS[e.result]);
     if (e.location) tip.push(e.location);
     if (!google) tip.push(e.synced ? '✓ 已同步到 Google 日历' : '未同步');
+    // DDL 过了还挂着「待进行」，是这一页上最该被看见的东西。
+    const overdue = task && e.result === 'pending' && new Date(e.due || e.end) < new Date();
+    if (overdue) tip.push('已过截止时间，还没回填结果');
 
     const style = `top:${top.toFixed(1)}px; height:${height.toFixed(1)}px;`
       + ` left:${(it.col * width).toFixed(3)}%; width:${width.toFixed(3)}%;`
@@ -111,27 +116,40 @@
       ? `<button type="button" class="ev__sync" data-sync="${e.round_id}" title="同步到 Google 日历">↑</button>` : '';
 
     const short = height < 34 ? ' ev--short' : '';
+    const flavor = google ? 'google' : (task ? 'task' : 'interview');
 
-    return `<article class="ev ev--${google ? 'google' : 'interview'}${short}"
+    return `<article class="ev ev--${flavor}${short}${overdue ? ' ev--overdue' : ''}"
              style="${style}" title="${esc(tip.join(' · '))}"
              ${google ? (e.url ? `data-url="${esc(e.url)}"` : '') : `data-app="${e.application_id}"`}>
-      <span class="ev__title">${esc(e.title)}</span>
+      <span class="ev__title">${task ? '⏰ ' : ''}${esc(e.title)}${task && short ? ' · ' + esc(time) : ''}</span>
       <span class="ev__time">${esc(time)}</span>
       ${sync}
     </article>`;
   }
 
-  function allDayHTML(entries) {
+  // 顶部横条：全天事件，外加当天所有任务的 DDL。
+  //
+  // DDL 常常压在 23:59，缩在网格最底下、要滚到底才看得见——而它恰恰是
+  // 「今天必须处理」的那一条。所以它在时间轴上照画，同时在顶部再挂一次。
+  function stripHTML(entries) {
     return entries.map((e) => {
       const google = e.source === 'google';
-      const style = google ? '' : ` style="--entry-color:${esc(e.stage_color || '#0052cc')}"`;
-      return `<article class="ev ev--allday ev--${google ? 'google' : 'interview'}"${style}
-               title="${esc(e.title)}"
+      const task = e.source === 'task';
+      const flavor = google ? 'google' : (task ? 'task' : 'interview');
+      const style = google ? '' : ` style="--entry-color:${esc(e.stage_color || '#0891b2')}"`;
+      const when = task && !e.all_day ? ` ${hhmm(e.due || e.end)} 截止` : '';
+      const overdue = task && e.result === 'pending' && new Date(e.due || e.end) < new Date();
+      return `<article class="ev ev--strip ev--${flavor}${overdue ? ' ev--overdue' : ''}"${style}
+               title="${esc(e.title + when)}"
                ${google ? (e.url ? `data-url="${esc(e.url)}"` : '') : `data-app="${e.application_id}"`}>
-        <span class="ev__title">${esc(e.title)}</span>
+        <span class="ev__title">${task ? '⏰ ' : ''}${esc(e.title)}</span>
+        ${when ? `<span class="ev__due">${esc(when.trim())}</span>` : ''}
       </article>`;
     }).join('');
   }
+
+  // 顶部横条上要显示的：全天事件 + 任务的 DDL。
+  const stripEntries = (day) => day.entries.filter((e) => e.all_day || e.source === 'task');
 
   // 当前时刻那条红线。只画在「今天」那一列上。
   function nowLineHTML(day) {
@@ -155,12 +173,12 @@
       </div>`;
     }).join('');
 
-    const anyAllDay = days.some((day) => day.entries.some((e) => e.all_day));
-    const allday = anyAllDay
+    const anyStrip = days.some((day) => stripEntries(day).length > 0);
+    const strip = anyStrip
       ? `<div class="week__allday">
-          <div class="week__gutter-label">全天</div>
+          <div class="week__gutter-label">全天 / 截止</div>
           ${days.map((day) =>
-            `<div class="week__allday-col">${allDayHTML(day.entries.filter((e) => e.all_day))}</div>`).join('')}
+            `<div class="week__allday-col">${stripHTML(stripEntries(day))}</div>`).join('')}
         </div>`
       : '';
 
@@ -176,7 +194,7 @@
         <div class="week__gutter-label">GMT+8</div>
         ${head}
       </div>
-      ${allday}
+      ${strip}
       <div class="week__body" id="week-body">
         <div class="week__hours">${hours}</div>
         ${cols}
@@ -229,7 +247,7 @@
     document.getElementById('agenda-pending-list').innerHTML = entries.map((e) =>
       `<article class="entry entry--interview entry--pending" data-app="${e.application_id}"
                 style="--entry-color: ${esc(e.stage_color || '#0052cc')}">
-        <time class="entry__time">待安排</time>
+        <time class="entry__time">${e.source === 'task' ? '待定 DDL' : '待安排'}</time>
         <div class="entry__body">
           <h4 class="entry__title" title="${esc(e.title)}">${esc(e.title)}</h4>
           <div class="entry__meta"><span class="entry__key">${esc(e.application_key)}</span></div>

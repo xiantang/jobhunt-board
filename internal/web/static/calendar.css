@@ -59,7 +59,7 @@
 }
 
 /* 全天事件不在时间轴上，单独一条横带压在网格顶上。 */
-.week__allday { border-bottom: 1px solid var(--border); max-height: 84px; overflow-y: auto; }
+.week__allday { border-bottom: 1px solid var(--border); max-height: 96px; overflow-y: auto; }
 .week__allday-col {
   border-left: 1px solid var(--border);
   padding: 3px;
@@ -144,6 +144,25 @@
   color: var(--text);
 }
 
+/* 任务（在线测评）画成一条截止线：虚线框、底边实心压在 DDL 那一刻上。
+   不填色是因为它并不真的占住这半小时，只是「到这儿为止」。 */
+.ev--task {
+  background: color-mix(in srgb, var(--entry-color, #0891b2) 12%, var(--surface));
+  border: 1px dashed var(--entry-color, #0891b2);
+  border-bottom: 2px solid var(--entry-color, #0891b2);
+  color: var(--text);
+  justify-content: flex-end;
+}
+.ev--task .ev__time { opacity: 1; font-weight: 600; color: var(--entry-color, #0891b2); }
+
+/* DDL 过了还挂着「待进行」——这是整页最该被看见的一格。 */
+.ev--overdue {
+  border-color: var(--danger);
+  border-bottom-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+.ev--overdue .ev__time { color: var(--danger); }
+
 .ev__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev__time { font-size: 10px; opacity: .8; white-space: nowrap; }
 /* 太矮的块只放得下一行，时间藏进 title 里（悬停仍看得到） */
@@ -167,12 +186,19 @@
 .ev:hover .ev__sync { display: block; }
 .ev__sync:hover { background: rgba(255, 255, 255, .45); }
 
-.ev--allday {
+/* 顶部横条上的一格：不参与时间轴定位，横着排。 */
+.ev--strip {
   position: static;
   flex-direction: row;
   align-items: center;
+  gap: 6px;
   font-size: 11px;
 }
+.ev--strip .ev__title { flex: 1; min-width: 0; }
+.ev--strip .ev__due { flex: none; font-weight: 600; color: var(--entry-color, #0891b2); }
+.ev--strip.ev--overdue .ev__due { color: var(--danger); }
+/* 顶部这条是提示，不是时间轴上的截止线，底边不用加重。 */
+.ev--strip.ev--task { border-bottom-width: 1px; }
 
 /* ---- 还没定时间 ---- */
 
