@@ -1,0 +1,120 @@
+{{- if .Values.mysql.internal.enabled -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "jobhunt.fullname" . }}-mysql
+  labels:
+    {{- include "jobhunt.mysqlLabels" . | nindent 4 }}
+spec:
+  # 单实例。没有主从，也不该有 —— 一个人用的看板，多一个副本只是多一份
+  # 需要维护的复制关系。要高可用的前提是先换成托管实例，不是把这里改成 2。
+  replicas: 1
+  serviceName: {{ include "jobhunt.fullname" . }}-mysql
+  selector:
+    matchLabels:
+      {{- include "jobhunt.mysqlSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jobhunt.mysqlLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        # mysql 官方镜像里的 mysql 用户是 999。数据目录属主要对上，
+        # 否则初始化时报 "Can't create/write to file"。
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: mysql
+          image: "{{ .Values.mysql.internal.image }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            # utf8mb4：公司名和备注里真的会有 emoji,默认的 utf8mb3 存不下。
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_general_ci
+            # 这台机器还跑着 k3s 和博客，别让 InnoDB 把内存吃光。
+            # 这个库总共几百行数据，128M 的缓冲池绰绰有余。
+            - --innodb-buffer-pool-size={{ .Values.mysql.internal.bufferPoolSize }}
+            # binlog 对单实例没用（不做主从、不做 PITR）,关掉省磁盘和写放大。
+            # 备份靠 mysqldump,见 k8s/README.md。
+            - --skip-log-bin
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.internal.secretName }}
+                  key: root-password
+            # 应用自己的账号。root 只留给运维手动连，应用不用它。
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.internal.database | quote }}
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.internal.secretName }}
+                  key: username
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.internal.secretName }}
+                  key: password
+          ports:
+            - name: mysql
+              containerPort: 3306
+
+          # 就绪探针必须真的执行一次查询。只探 TCP 端口的话，
+          # 初始化数据库那几十秒里端口已经在监听但还不能用，
+          # 应用会在那个窗口里连上去然后失败。
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            # 首次启动要建数据目录，慢的时候要一分多钟。
+            # startupProbe 更合适，但 liveness 给足延迟也够用，少一个概念。
+            initialDelaySeconds: 120
+            periodSeconds: 20
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            # 官方镜像的 entrypoint 会往这两个地方写东西。
+            - name: run
+              mountPath: /var/run/mysqld
+            - name: tmp
+              mountPath: /tmp
+
+          resources:
+            {{- toYaml .Values.mysql.internal.resources | nindent 12 }}
+
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+
+  # volumeClaimTemplates 生成的 PVC 不跟着 StatefulSet 走：
+  # 删掉 StatefulSet,PVC 还在，数据也还在。要真删得手动 delete pvc。
+  # 这正是想要的 —— 有状态的东西不该被自动化顺手带走。
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "jobhunt.mysqlLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.mysql.internal.storageClass }}
+        storageClassName: {{ .Values.mysql.internal.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.internal.size | quote }}
+{{- end }}

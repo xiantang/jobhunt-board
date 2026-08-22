@@ -77,6 +77,35 @@ mysql:
   secretName: jobhunt-mysql
   secretKey: dsn
 
+  # 集群里自带的那个 MySQL 实例（StatefulSet + PVC + ClusterIP Service）。
+  #
+  # 它和上面的 secretName 是两件事：这里配的是【怎么把库跑起来】，
+  # 上面配的是【应用拿什么连接串去连】。两个 Secret 也分开：
+  #   jobhunt-mysql-auth  给 MySQL 自己 —— root 口令、应用账号和口令
+  #   jobhunt-mysql       给应用 —— 一整条 DSN
+  # 分开是因为泄露面不同：应用只该知道自己那条 DSN,不该拿到 root。
+  #
+  # enabled: false 就是回到「连外部实例」，只留上面那条 DSN。
+  internal:
+    enabled: true
+    image: mysql:8.4
+    database: jobhunt
+    secretName: jobhunt-mysql-auth
+    # 留空用集群默认 StorageClass。k3s 默认是 local-path
+    # —— 数据落在【那台节点】的本地磁盘，不是备份，见 k8s/README.md。
+    storageClass: ""
+    size: 5Gi
+    # 这台机器还跑着 k3s 和博客，别让 InnoDB 把内存吃光。
+    bufferPoolSize: 128M
+    resources:
+      requests:
+        cpu: 50m
+        memory: 384Mi
+      limits:
+        # MySQL 超内存会被 OOMKill,而不是像 CPU 那样降速，
+        # 所以这个上限要留够余量：缓冲池 128M + 连接和线程的开销。
+        memory: 768Mi
+
 resources:
   requests:
     cpu: 10m

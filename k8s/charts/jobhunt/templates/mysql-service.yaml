@@ -1,0 +1,18 @@
+{{- if .Values.mysql.internal.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "jobhunt.fullname" . }}-mysql
+  labels:
+    {{- include "jobhunt.mysqlLabels" . | nindent 4 }}
+spec:
+  # 只给集群内用，不开 NodePort 也不进 Ingress —— 数据库不该有公网入口。
+  # 要从本机连上去调试就 kubectl port-forward。
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: mysql
+      name: mysql
+  selector:
+    {{- include "jobhunt.mysqlSelectorLabels" . | nindent 4 }}
+{{- end }}
