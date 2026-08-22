@@ -11,6 +11,11 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// 时区库编进二进制。代码里大量用 time.Local（日程按本地时间排布），
+	// 而生产镜像是 distroless，里面没有 /usr/share/zoneinfo ——
+	// 不 import 它的话容器里 TZ=Asia/Shanghai 查不到东西，会静默退回 UTC，
+	// 症状是日程整体偏 8 小时。本地开发有系统时区，察觉不到这个坑。
+	_ "time/tzdata"
 
 	"github.com/gin-gonic/gin"
 
