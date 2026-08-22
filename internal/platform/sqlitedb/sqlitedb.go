@@ -341,7 +341,7 @@ func Seed(db *sql.DB) error {
 		company, role, channel, notes, stage, intent string
 		owner                                        int64
 	}{
-		{"百度", "后端研发工程师", "内推", "内推码已用，简历已过初筛", "round_2", "high", ids[0]},
+		{"某大厂", "后端研发工程师", "内推", "内推码已用，简历已过初筛", "round_2", "high", ids[0]},
 		{"某电商", "Go 开发", "官网投递", "在线测评 90 分钟，限时", "online_test", "normal", ids[0]},
 		{"某创业公司", "基础架构", "猎头", "HRBP 沟通薪资中", "hrbp", "high", ids[0]},
 		{"某外企", "平台工程", "官网投递", "面试官反馈方向不匹配", "rejected", "low", ids[0]},

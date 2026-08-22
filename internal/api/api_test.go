@@ -367,7 +367,7 @@ func TestStageConfig(t *testing.T) {
 	var busyID string
 	for _, s := range listed["stages"].([]any) {
 		st := s.(map[string]any)
-		if st["key"] == "round_2" { // 种子数据里「百度」停在二面
+		if st["key"] == "round_2" { // 种子数据里「某大厂」停在二面
 			busyID = strconv.Itoa(int(st["id"].(float64)))
 		}
 	}
