@@ -123,6 +123,10 @@ func execScript(t *testing.T, node, script string, data any, rootID string) (str
 	}
 
 	cmd := exec.Command(node, "testdata/dom_shim.js", script, dataPath, rootID)
+	// 时区必须钉死。测试数据里的时刻带 +08:00，而断言的是脚本按【本机时区】
+	// 算出来的像素位置（09:00 → top:396px）——不钉的话，这个测试只在东八区
+	// 的机器上通过，在 CI（UTC）和其他时区的开发机上都会挂。
+	cmd.Env = append(os.Environ(), "TZ=Asia/Shanghai")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
