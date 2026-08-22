@@ -21,21 +21,22 @@
   const MODES = { online: '线上', onsite: '现场', phone: '电话' };
   const RESULTS = { pending: '待进行', passed: '已通过', failed: '未通过', cancelled: '已取消' };
 
-  // 视图状态：起始日 + 天数。默认一周，从今天开始。
-  let from = todayISO();
-  let days = 7;
-
-  function todayISO() {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  }
-
+  // 时间小工具。这几个必须定义在下面的 `let from = todayISO()` 之前——
+  // const 声明有暂时性死区，函数声明虽然会提升，但它引用的 pad 不会。
   const pad = (n) => String(n).padStart(2, '0');
+
+  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  const todayISO = () => ymd(new Date());
 
   const hhmm = (iso) => {
     const d = new Date(iso);
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
+
+  // 视图状态：起始日 + 天数。默认一周，从今天开始。
+  let from = todayISO();
+  let days = 7;
 
   // ---------- 渲染 ----------
 
@@ -141,7 +142,7 @@
   function shift(offset) {
     const d = new Date(from + 'T00:00:00');
     d.setDate(d.getDate() + offset);
-    from = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    from = ymd(d);
     reload();
   }
 
