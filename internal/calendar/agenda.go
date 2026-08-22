@@ -96,7 +96,7 @@ func (s *Service) Load(ctx context.Context, from time.Time, days int) (Agenda, e
 		if err != nil {
 			agenda.Warning = "Google 日历没能拉回来：" + apperrMessage(err)
 		} else {
-			for _, e := range events {
+			for _, e := range dropOwnEvents(events, rounds) {
 				entries = append(entries, googleEntry(e))
 			}
 		}
@@ -120,6 +120,30 @@ func (s *Service) listEvents(ctx context.Context, from, to time.Time) ([]gcal.Ev
 		return nil, err
 	}
 	return s.client.ListEvents(ctx, token, calendarID, from, to)
+}
+
+// dropOwnEvents 滤掉「我们自己推上去的那些事件」。
+// 面试同步到 Google 之后，ListEvents 会把它原样拉回来——不滤的话
+// 同一场面试在时间线上出现两次，还会被 markConflicts 当成撞期标红。
+// 招聘方自己发来的邀请 id 对不上，滤不掉，那本来也确实是另一条记录。
+func dropOwnEvents(events []gcal.Event, rounds []application.ScheduledRound) []gcal.Event {
+	own := make(map[string]struct{}, len(rounds))
+	for _, r := range rounds {
+		if r.GoogleEventID != "" {
+			own[r.GoogleEventID] = struct{}{}
+		}
+	}
+	if len(own) == 0 {
+		return events
+	}
+	out := events[:0:0]
+	for _, e := range events {
+		if _, mine := own[e.ID]; mine {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func interviewEntry(r application.ScheduledRound) Entry {
