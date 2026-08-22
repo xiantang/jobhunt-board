@@ -34,6 +34,9 @@
         {{ end }}
       </select>
       <button type="button" class="btn btn--ghost" id="add-member">+ 成员</button>
+      {{ if .AIEnabled }}
+      <button type="button" class="btn btn--ghost" id="open-ingest">✨ AI 录入</button>
+      {{ end }}
       <button type="button" class="btn btn--ghost" id="open-stages">⚙ 配置阶段</button>
     </div>
   </header>
@@ -168,6 +171,83 @@
       <ul id="drawer-events"></ul>
     </section>
   </aside>
+
+  <!-- AI 录入抽屉 -->
+  {{ if .AIEnabled }}
+  <aside class="drawer drawer--ingest" id="ingest-drawer" hidden>
+    <header class="drawer__head">
+      <span class="card__key">AI 录入</span>
+      <button type="button" class="btn btn--ghost" data-close="ingest-drawer">关闭</button>
+    </header>
+    <p class="drawer__hint">
+      把 HR 邮件、面试邀约或测评通知整段粘进来，AI 会抽出公司、岗位、阶段和时间，
+      先生成一份草稿。草稿只是预填，改完点「确认录入」才真正写进看板。
+    </p>
+
+    <form class="ingest-input" id="ingest-form">
+      <textarea name="text" rows="10" placeholder="在这里粘贴邮件原文…" required></textarea>
+      <button type="submit" class="btn btn--primary" id="ingest-parse">解析</button>
+    </form>
+
+    <section class="ingest-draft" id="ingest-draft" hidden>
+      <p class="ingest-summary" id="ingest-summary"></p>
+      <p class="ingest-warn" id="ingest-warn" hidden></p>
+
+      <form class="drawer__form" id="ingest-confirm-form">
+        <div class="drawer__row">
+          <label>公司<input type="text" name="company" maxlength="60" required></label>
+          <label>岗位<input type="text" name="role" maxlength="60"></label>
+        </div>
+        <div class="drawer__row">
+          <label>投递渠道<input type="text" name="channel" maxlength="30"></label>
+          <label>阶段<select name="stage_key"></select></label>
+          <label>跟进人
+            <select name="owner_id">
+              <option value="0">未指定</option>
+              {{ range .Members }}<option value="{{ .ID }}">{{ .Name }}</option>{{ end }}
+            </select>
+          </label>
+          <label>意向度
+            <select name="intent">
+              <option value="low">低</option>
+              <option value="normal" selected>中</option>
+              <option value="high">高</option>
+            </select>
+          </label>
+        </div>
+        <label>卡片备注<textarea name="notes" rows="2" maxlength="2000"></textarea></label>
+
+        <label class="ingest-toggle">
+          <input type="checkbox" name="create_round" checked> 同时录入这一轮的面试 / 测评记录
+        </label>
+        <fieldset class="ingest-round" id="ingest-round">
+          <div class="drawer__row">
+            <label>时间<input type="datetime-local" name="scheduled_at"></label>
+            <label>时长（分钟）<input type="number" name="duration_min" min="5" max="600"></label>
+            <label>方式
+              <select name="mode">
+                <option value="online">线上</option>
+                <option value="onsite">现场</option>
+                <option value="phone">电话</option>
+              </select>
+            </label>
+          </div>
+          <div class="drawer__row">
+            <label>链接<input type="url" name="meeting_url" maxlength="300" placeholder="https://…"></label>
+            <label>地点<input type="text" name="meeting_place" maxlength="120"></label>
+            <label>面试官<input type="text" name="interviewer" maxlength="60"></label>
+          </div>
+          <label>这一轮备注<textarea name="round_notes" rows="2" maxlength="2000"></textarea></label>
+        </fieldset>
+
+        <div class="drawer__actions">
+          <button type="submit" class="btn btn--primary">确认录入</button>
+          <button type="button" class="btn btn--ghost" id="ingest-reset">重新粘贴</button>
+        </div>
+      </form>
+    </section>
+  </aside>
+  {{ end }}
 
   <!-- 阶段配置抽屉 -->
   <aside class="drawer drawer--stages" id="stage-drawer" hidden>

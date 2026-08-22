@@ -49,6 +49,10 @@ type CreateInput struct {
 	Notes   string
 	OwnerID *int64
 	Intent  string
+	// StageKey 是起始阶段，为空表示落在第一列。
+	// 不是每条流程都从头走——猎头直接约一面、内推跳过初筛都很常见，
+	// 新卡片没有历史，落在哪一列只是个起点，不受流转规则约束。
+	StageKey string
 }
 
 // UpdateInput 是维护流程信息的入参，nil 表示该字段不改。
@@ -155,6 +159,12 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput, act
 	if err != nil {
 		return Application{}, err
 	}
+	if in.StageKey != "" {
+		if entry, err = flow.Parse(in.StageKey); err != nil {
+			return Application{}, err
+		}
+	}
+	// 起始阶段可以自选，但「必须先有跟进人」这条规则照样要守。
 	if entry.RequiresOwner && (in.OwnerID == nil || *in.OwnerID == 0) {
 		return Application{}, apperr.Conflict(apperr.CodeOwnerRequired,
 			fmt.Sprintf("「%s」要求先指定跟进人", entry.Label))
@@ -200,7 +210,7 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput, act
 			return Application{}, apperr.Internal(err)
 		}
 	}
-	// 第一个阶段本身就是面试阶段时，同样先挂一条待安排的记录。
+	// 起始阶段本身就是面试阶段时，同样先挂一条待安排的记录。
 	if entry.Kind == workflow.KindInterview {
 		if _, err := insertRound(ctx, tx, id, defaultRound(), entry.Key, entry.Label); err != nil {
 			return Application{}, apperr.Internal(err)

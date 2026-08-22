@@ -14,13 +14,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"interview/internal/ai"
 	"interview/internal/platform/ginx"
 	"interview/internal/platform/sqlitedb"
 	"interview/internal/server"
 )
 
 // setup 起一个真实的 gin 引擎 + 临时库（含种子看板与十个默认阶段）。
-func setup(t *testing.T) *gin.Engine {
+// 不注入模型，AI 录入处于关闭状态。
+func setup(t *testing.T) *gin.Engine { return setupWithModel(t, nil) }
+
+// setupWithModel 同上，但注入一个假模型，用来测 AI 录入而不打真网络。
+func setupWithModel(t *testing.T, model ai.Completer) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -33,7 +38,7 @@ func setup(t *testing.T) *gin.Engine {
 	if err := sqlitedb.Seed(db); err != nil {
 		t.Fatalf("写入种子数据失败: %v", err)
 	}
-	return server.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return server.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), model)
 }
 
 // do 发一个请求并返回状态码与解析后的 JSON。

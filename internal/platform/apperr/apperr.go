@@ -15,6 +15,7 @@ const (
 	CodeConflict          = "CONFLICT"
 	CodeInvalidTransition = "INVALID_TRANSITION"
 	CodeOwnerRequired     = "OWNER_REQUIRED"
+	CodeAIUnavailable     = "AI_UNAVAILABLE"
 	CodeInternal          = "INTERNAL"
 )
 
@@ -68,6 +69,11 @@ func NotFound(message string) *Error {
 // Conflict 状态冲突，409。
 func Conflict(code, message string) *Error {
 	return &Error{Code: code, Status: http.StatusConflict, Message: message}
+}
+
+// Unavailable 依赖的外部能力暂时不可用，503。
+func Unavailable(code, message string) *Error {
+	return &Error{Code: code, Status: http.StatusServiceUnavailable, Message: message}
 }
 
 // Internal 内部错误，500；真实原因只写日志。

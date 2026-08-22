@@ -108,6 +108,7 @@ func (h *Handler) Board(c *gin.Context) {
 		"Members":         members,
 		"Kinds":           kinds,
 		"CurrentMemberID": ginx.ActorID(c),
+		"AIEnabled":       h.api.AIEnabled(),
 		"FilterStage":     c.DefaultQuery("stage", "all"),
 		"FilterOwner":     c.DefaultQuery("owner", "all"),
 		"FilterUpcoming":  c.Query("upcoming") == "1",

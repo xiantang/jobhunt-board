@@ -8,9 +8,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"interview/internal/ai"
 	"interview/internal/api"
 	"interview/internal/application"
 	"interview/internal/board"
+	"interview/internal/ingest"
 	"interview/internal/member"
 	"interview/internal/platform/ginx"
 	"interview/internal/stage"
@@ -18,13 +20,15 @@ import (
 )
 
 // New 构建完整的 gin 引擎：中间件 → 页面路由 → /api 分组 → 静态资源。
-func New(db *sql.DB, logger *slog.Logger) *gin.Engine {
+// model 为 nil 表示没配 OpenAI key，AI 录入功能关闭，其余功能不受影响。
+func New(db *sql.DB, logger *slog.Logger, model ai.Completer) *gin.Engine {
 	members := member.NewService(db)
 	boards := board.NewService(db)
 	stages := stage.NewService(db)
 	applications := application.NewService(db, members, boards, stages)
+	ingestion := ingest.NewService(model, stages, applications)
 
-	apiHandler := api.New(members, boards, stages, applications)
+	apiHandler := api.New(members, boards, stages, applications, ingestion)
 	pages := web.NewHandler(apiHandler, members)
 
 	r := gin.New()

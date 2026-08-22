@@ -537,6 +537,141 @@
     }
   });
 
+  // ---------- AI 录入 ----------
+  // 两步走：解析只拿草稿，确认才落库。中间那一步用户可以随便改，
+  // 所以确认请求里不带任何模型原文，走的就是普通的建卡 / 流转 / 排期。
+
+  const ingestDrawer = document.getElementById('ingest-drawer');
+  if (ingestDrawer) {
+    const parseForm = document.getElementById('ingest-form');
+    const draftEl = document.getElementById('ingest-draft');
+    const confirmForm = document.getElementById('ingest-confirm-form');
+    const warnEl = document.getElementById('ingest-warn');
+    const roundBox = document.getElementById('ingest-round');
+    let matchedId = 0;
+
+    const CONFIDENCE = { high: '把握较大', medium: '有推断成分', low: '信息偏少，请仔细核对' };
+
+    document.getElementById('open-ingest').addEventListener('click', () => {
+      ingestDrawer.hidden = false;
+      parseForm.text.focus();
+    });
+
+    document.getElementById('ingest-reset').addEventListener('click', () => {
+      draftEl.hidden = true;
+      parseForm.hidden = false;
+      parseForm.text.value = '';
+      parseForm.text.focus();
+    });
+
+    // 阶段下拉跟着当前阶段配置走。新卡片选的是「起始阶段」——它没有历史，
+    // 从哪一列开始都行；复用已有卡片时选的才是「流转到哪一列」。
+    function fillStageOptions(selected, matched) {
+      const blank = matched ? '不改变阶段' : `默认第一列（${esc(STAGES[0] ? STAGES[0].label : '')}）`;
+      confirmForm.stage_key.innerHTML = [`<option value="">${blank}</option>`]
+        .concat(STAGES.map((s) => `<option value="${esc(s.key)}">${esc(s.label)}</option>`))
+        .join('');
+      confirmForm.stage_key.value = selected || '';
+    }
+
+    function renderDraft(d) {
+      matchedId = d.match ? d.match.id : 0;
+
+      const bits = [d.summary || 'AI 已解析这段文本'];
+      if (d.match) bits.push(`命中已有卡片 ${d.match.key}「${d.match.company}」，确认后录到这张卡上`);
+      else if (d.company) bits.push(`看板上没有「${d.company}」，确认后会新建一张卡片`);
+      if (CONFIDENCE[d.confidence]) bits.push(CONFIDENCE[d.confidence]);
+      document.getElementById('ingest-summary').textContent = bits.join(' · ');
+
+      // 阶段流转不合法时不拦着用户，只是把阶段清空，让他先录轮次再手动处理。
+      warnEl.hidden = d.stage_allowed;
+      warnEl.textContent = d.stage_warning || '';
+
+      confirmForm.company.value = d.company || '';
+      confirmForm.role.value = d.role || (d.match ? d.match.role : '');
+      confirmForm.channel.value = d.channel || (d.match ? d.match.channel : '');
+      confirmForm.notes.value = d.notes || '';
+      confirmForm.intent.value = d.match ? d.match.intent : 'normal';
+      confirmForm.owner_id.value = String((d.match && d.match.owner_id) || 0);
+      fillStageOptions(d.stage_allowed ? d.stage_key : '', !!d.match);
+
+      const r = d.round || {};
+      confirmForm.create_round.checked = true;
+      confirmForm.scheduled_at.value = toLocalInput(r.scheduled_at);
+      confirmForm.duration_min.value = r.duration_min || '';
+      confirmForm.mode.value = r.mode || 'online';
+      confirmForm.meeting_url.value = r.meeting_url || '';
+      confirmForm.meeting_place.value = r.meeting_place || '';
+      confirmForm.interviewer.value = r.interviewer || '';
+      confirmForm.round_notes.value = r.notes || '';
+      syncRoundBox();
+
+      parseForm.hidden = true;
+      draftEl.hidden = false;
+    }
+
+    const syncRoundBox = () => { roundBox.disabled = !confirmForm.create_round.checked; };
+    confirmForm.create_round.addEventListener('change', syncRoundBox);
+
+    parseForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = parseForm.text.value.trim();
+      if (!text) return;
+      const btn = document.getElementById('ingest-parse');
+      btn.disabled = true;
+      btn.textContent = '解析中…';
+      try {
+        const data = await API.post(`/api/boards/${boardKey}/ingest/parse`, { text });
+        renderDraft(data.draft);
+      } catch (err) {
+        API.toast(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '解析';
+      }
+    });
+
+    confirmForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const company = confirmForm.company.value.trim();
+      if (!company) {
+        API.toast('公司名称不能为空');
+        return;
+      }
+      const owner = Number(confirmForm.owner_id.value);
+      const withRound = confirmForm.create_round.checked;
+      const duration = Number(confirmForm.duration_min.value);
+      try {
+        const data = await API.post(`/api/boards/${boardKey}/ingest/confirm${query}`, {
+          application_id: matchedId,
+          company,
+          role: confirmForm.role.value.trim(),
+          channel: confirmForm.channel.value.trim(),
+          notes: confirmForm.notes.value.trim(),
+          owner_id: owner > 0 ? owner : null,
+          intent: confirmForm.intent.value,
+          stage_key: confirmForm.stage_key.value,
+          create_round: withRound,
+          scheduled_at: withRound ? toRFC3339(confirmForm.scheduled_at.value) : null,
+          duration_min: withRound && duration > 0 ? duration : 0,
+          mode: withRound ? confirmForm.mode.value : '',
+          meeting_url: withRound ? confirmForm.meeting_url.value.trim() : '',
+          meeting_place: withRound ? confirmForm.meeting_place.value.trim() : '',
+          interviewer: withRound ? confirmForm.interviewer.value.trim() : '',
+          round_notes: withRound ? confirmForm.round_notes.value.trim() : '',
+        });
+        renderBoard(data.board);
+        ingestDrawer.hidden = true;
+        parseForm.hidden = false;
+        parseForm.text.value = '';
+        draftEl.hidden = true;
+        API.toast(`${data.created ? '已创建' : '已更新'} ${data.application.key}`, true);
+      } catch (err) {
+        API.toast(err.message);
+      }
+    });
+  }
+
   // ---------- 时间与文案小工具 ----------
 
   function whenText(iso) {

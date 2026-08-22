@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"interview/internal/ai"
 	"interview/internal/platform/sqlitedb"
 	"interview/internal/server"
 )
@@ -39,7 +40,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(db, logger)}
+	// AI 录入靠环境变量开关：没配 OPENAI_API_KEY 就只是少一个入口，服务照常起。
+	model := ai.New(ai.ConfigFromEnv())
+	if model.Available() {
+		logger.Info("AI 录入已启用", "model", model.Model())
+	} else {
+		logger.Info("AI 录入未启用：未设置 OPENAI_API_KEY")
+	}
+
+	srv := &http.Server{Addr: *addr, Handler: server.New(db, logger, model)}
 
 	go func() {
 		logger.Info("服务已启动", "addr", *addr, "db", *dbPath)

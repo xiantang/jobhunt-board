@@ -10,6 +10,7 @@ import (
 
 	"interview/internal/application"
 	"interview/internal/board"
+	"interview/internal/ingest"
 	"interview/internal/member"
 	"interview/internal/platform/apperr"
 	"interview/internal/platform/ginx"
@@ -17,18 +18,23 @@ import (
 	"interview/internal/workflow"
 )
 
-// Handler 持有各业务服务。
+// Handler 持有各业务服务。Ingest 为 nil 表示没配 OpenAI key，AI 录入整体关闭。
 type Handler struct {
 	Members      *member.Service
 	Boards       *board.Service
 	Stages       *stage.Service
 	Applications *application.Service
+	Ingest       *ingest.Service
 }
 
 // New 构造 API handler。
-func New(members *member.Service, boards *board.Service, stages *stage.Service, apps *application.Service) *Handler {
-	return &Handler{Members: members, Boards: boards, Stages: stages, Applications: apps}
+func New(members *member.Service, boards *board.Service, stages *stage.Service,
+	apps *application.Service, ai *ingest.Service) *Handler {
+	return &Handler{Members: members, Boards: boards, Stages: stages, Applications: apps, Ingest: ai}
 }
+
+// AIEnabled 表示 AI 录入可用，页面据此决定要不要显示入口。
+func (h *Handler) AIEnabled() bool { return h.Ingest != nil && h.Ingest.Available() }
 
 // Register 把接口挂到 /api 分组。
 func (h *Handler) Register(r *gin.RouterGroup) {
@@ -37,6 +43,8 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	r.POST("/boards/:key/applications", h.CreateApplication)
 	r.GET("/boards/:key/stages", h.ListStages)
 	r.POST("/boards/:key/stages", h.CreateStage)
+	r.POST("/boards/:key/ingest/parse", h.ParseIngest)
+	r.POST("/boards/:key/ingest/confirm", h.ConfirmIngest)
 
 	r.PATCH("/stages/:id", h.UpdateStage)
 	r.PATCH("/stages/:id/position", h.ReorderStage)
@@ -323,15 +331,16 @@ func (h *Handler) DeleteStage(c *gin.Context) {
 
 // CreateApplicationReq 是新建面试流程的请求体。
 type CreateApplicationReq struct {
-	Company string `json:"company" binding:"required,max=60"`
-	Role    string `json:"role"    binding:"max=60"`
-	Channel string `json:"channel" binding:"max=30"`
-	Notes   string `json:"notes"   binding:"max=2000"`
-	OwnerID *int64 `json:"owner_id"`
-	Intent  string `json:"intent"  binding:"omitempty,oneof=low normal high"`
+	Company  string `json:"company" binding:"required,max=60"`
+	Role     string `json:"role"    binding:"max=60"`
+	Channel  string `json:"channel" binding:"max=30"`
+	Notes    string `json:"notes"   binding:"max=2000"`
+	OwnerID  *int64 `json:"owner_id"`
+	Intent   string `json:"intent"    binding:"omitempty,oneof=low normal high"`
+	StageKey string `json:"stage_key"` // 起始阶段，缺省落在第一列
 }
 
-// CreateApplication 在看板下新建一条投递，落在第一个阶段。
+// CreateApplication 在看板下新建一条投递，缺省落在第一个阶段。
 func (h *Handler) CreateApplication(c *gin.Context) {
 	var req CreateApplicationReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -345,12 +354,13 @@ func (h *Handler) CreateApplication(c *gin.Context) {
 	}
 
 	created, err := h.Applications.Create(c.Request.Context(), b.ID, application.CreateInput{
-		Company: req.Company,
-		Role:    req.Role,
-		Channel: req.Channel,
-		Notes:   req.Notes,
-		OwnerID: req.OwnerID,
-		Intent:  req.Intent,
+		Company:  req.Company,
+		Role:     req.Role,
+		Channel:  req.Channel,
+		Notes:    req.Notes,
+		OwnerID:  req.OwnerID,
+		Intent:   req.Intent,
+		StageKey: req.StageKey,
 	}, ginx.ActorID(c))
 	if err != nil {
 		ginx.Fail(c, err)
