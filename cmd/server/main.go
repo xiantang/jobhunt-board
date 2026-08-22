@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"interview/internal/ai"
+	"interview/internal/gcal"
 	"interview/internal/platform/sqlitedb"
 	"interview/internal/server"
 )
@@ -48,7 +49,14 @@ func main() {
 		logger.Info("AI 录入未启用：未设置 OPENAI_API_KEY")
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(db, logger, model)}
+	google := gcal.New(gcal.ConfigFromEnv())
+	if google.Available() {
+		logger.Info("Google 日历集成已启用", "redirect_url", google.RedirectURL())
+	} else {
+		logger.Info("Google 日历集成未启用：未设置 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET")
+	}
+
+	srv := &http.Server{Addr: *addr, Handler: server.New(db, logger, model, google)}
 
 	go func() {
 		logger.Info("服务已启动", "addr", *addr, "db", *dbPath)

@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"interview/internal/ai"
+	"interview/internal/gcal"
 	"interview/internal/platform/ginx"
 	"interview/internal/platform/sqlitedb"
 	"interview/internal/server"
@@ -26,6 +27,11 @@ func setup(t *testing.T) *gin.Engine { return setupWithModel(t, nil) }
 
 // setupWithModel 同上，但注入一个假模型，用来测 AI 录入而不打真网络。
 func setupWithModel(t *testing.T, model ai.Completer) *gin.Engine {
+	return setupWith(t, model, gcal.New(gcal.Config{}))
+}
+
+// setupWith 起引擎并注入指定的模型与 Google 客户端。
+func setupWith(t *testing.T, model ai.Completer, google *gcal.Client) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -38,7 +44,7 @@ func setupWithModel(t *testing.T, model ai.Completer) *gin.Engine {
 	if err := sqlitedb.Seed(db); err != nil {
 		t.Fatalf("写入种子数据失败: %v", err)
 	}
-	return server.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), model)
+	return server.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), model, google)
 }
 
 // do 发一个请求并返回状态码与解析后的 JSON。

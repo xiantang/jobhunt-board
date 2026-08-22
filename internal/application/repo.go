@@ -373,3 +373,102 @@ func normalizeText(field, raw string, max int) (string, error) {
 	}
 	return text, nil
 }
+
+// ---------- 日程页用的跨看板查询 ----------
+
+// selectScheduled 把轮次、流程、看板、阶段配色 join 到一起。
+// 阶段可能已经被删掉（历史轮次还在），所以 stages 用 LEFT JOIN，
+// 拿不到配色就退回灰色，而不是让整条记录消失。
+const selectScheduled = `
+SELECT r.id, r.application_id, b.key, a.seq, a.company, a.role,
+       r.stage_key, r.stage_label, COALESCE(s.color, '#6b7280'),
+       r.scheduled_at, r.duration_min, r.mode, r.meeting_url, r.meeting_place,
+       r.interviewer, r.result, r.notes, r.google_event_id
+FROM interview_rounds r
+JOIN applications a ON a.id = r.application_id
+JOIN boards       b ON b.id = a.board_id
+LEFT JOIN stages  s ON s.board_id = a.board_id AND s.key = r.stage_key`
+
+func scanScheduled(sc interface{ Scan(...any) error }) (ScheduledRound, error) {
+	var (
+		r         ScheduledRound
+		seq       int
+		boardKey  string
+		scheduled sql.NullString
+	)
+	if err := sc.Scan(&r.RoundID, &r.ApplicationID, &boardKey, &seq, &r.Company, &r.Role,
+		&r.StageKey, &r.StageLabel, &r.StageColor, &scheduled, &r.DurationMin, &r.Mode,
+		&r.MeetingURL, &r.MeetingPlace, &r.Interviewer, &r.Result, &r.Notes,
+		&r.GoogleEventID); err != nil {
+		return ScheduledRound{}, err
+	}
+	r.BoardKey = boardKey
+	r.ApplicationKey = fmt.Sprintf("%s-%d", boardKey, seq)
+	if scheduled.Valid {
+		if t, err := time.Parse(time.RFC3339, scheduled.String); err == nil {
+			local := t.Local()
+			r.ScheduledAt = &local
+		}
+	}
+	return r, nil
+}
+
+func (r *repo) scheduledRounds(ctx context.Context, query string, args ...any) ([]ScheduledRound, error) {
+	rows, err := r.db.QueryContext(ctx, selectScheduled+query, args...)
+	if err != nil {
+		return nil, apperr.Internal(err)
+	}
+	defer rows.Close()
+
+	out := make([]ScheduledRound, 0, 16)
+	for rows.Next() {
+		item, err := scanScheduled(rows)
+		if err != nil {
+			return nil, apperr.Internal(err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Internal(err)
+	}
+	return out, nil
+}
+
+// upcomingRounds 返回 [from, to) 内已排期的面试。
+// 已取消的不出现在日程上；已通过/未通过的留着，方便回看这一周都发生了什么。
+func (r *repo) upcomingRounds(ctx context.Context, from, to time.Time) ([]ScheduledRound, error) {
+	return r.scheduledRounds(ctx, `
+		WHERE r.scheduled_at IS NOT NULL
+		  AND r.scheduled_at >= ? AND r.scheduled_at < ?
+		  AND r.result != 'cancelled'
+		ORDER BY r.scheduled_at`,
+		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+}
+
+// unscheduledRounds 返回还没定时间的待进行面试，日程页单独列出来提醒。
+func (r *repo) unscheduledRounds(ctx context.Context) ([]ScheduledRound, error) {
+	return r.scheduledRounds(ctx, `
+		WHERE r.scheduled_at IS NULL AND r.result = 'pending'
+		ORDER BY a.updated_at DESC`)
+}
+
+// scheduledRound 按轮次 id 取一条，用来拼日程标题。
+func (r *repo) scheduledRound(ctx context.Context, roundID int64) (ScheduledRound, error) {
+	item, err := scanScheduled(r.db.QueryRowContext(ctx, selectScheduled+` WHERE r.id = ?`, roundID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ScheduledRound{}, apperr.NotFound("面试记录不存在")
+	}
+	if err != nil {
+		return ScheduledRound{}, apperr.Internal(err)
+	}
+	return item, nil
+}
+
+// setGoogleEventID 记下这一轮对应的 Google 事件 id。
+func (r *repo) setGoogleEventID(ctx context.Context, roundID int64, eventID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE interview_rounds SET google_event_id = ? WHERE id = ?`, eventID, roundID); err != nil {
+		return apperr.Internal(err)
+	}
+	return nil
+}

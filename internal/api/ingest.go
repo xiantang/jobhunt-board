@@ -109,6 +109,7 @@ func (h *Handler) ConfirmIngest(c *gin.Context) {
 	payload := gin.H{"application": res.Application, "created": res.Created, "moved": res.Moved}
 	if res.Round != nil {
 		payload["round"] = res.Round
+		h.autoSync(c, res.Round.ID, payload)
 	}
 	h.respondWithBoard(c, res.Application.BoardKey, payload, res.Created)
 }

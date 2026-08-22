@@ -58,6 +58,19 @@ CREATE INDEX IF NOT EXISTS idx_applications_board ON applications (board_id, sta
 
 -- interview_rounds 是每一轮面试的独立记录：时间 + 会议方式。
 -- stage_label 存快照，阶段改名后历史仍然可读。
+-- google_accounts 存 Google Calendar 的授权凭证。
+-- 这是一个人自己用的看板，所以只有一行（CHECK 把 id 钉死在 1）。
+CREATE TABLE IF NOT EXISTS google_accounts (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    email         TEXT NOT NULL DEFAULT '',
+    calendar_id   TEXT NOT NULL DEFAULT 'primary',
+    access_token  TEXT NOT NULL DEFAULT '',
+    -- refresh_token 是长期凭证，access_token 过期后靠它换新的
+    refresh_token TEXT NOT NULL,
+    expiry        TEXT NOT NULL DEFAULT '',
+    connected_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS interview_rounds (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
@@ -72,6 +85,8 @@ CREATE TABLE IF NOT EXISTS interview_rounds (
     result         TEXT    NOT NULL DEFAULT 'pending'
                    CHECK (result IN ('pending', 'passed', 'failed', 'cancelled')),
     notes          TEXT    NOT NULL DEFAULT '',
+    -- google_event_id: 这一轮在 Google 日历上对应的事件，空表示还没同步过
+    google_event_id TEXT   NOT NULL DEFAULT '',
     created_at     TEXT    NOT NULL,
     updated_at     TEXT    NOT NULL
 );

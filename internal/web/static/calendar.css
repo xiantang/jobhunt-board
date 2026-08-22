@@ -1,0 +1,123 @@
+/* 日程页：一周七列，看板的面试和 Google 日历的会议共用一套条目样式，
+   只靠左边一条色带和配色区分来源。 */
+
+.page-calendar { display: flex; flex-direction: column; min-height: 100vh; }
+
+.agenda-nav { display: flex; align-items: center; gap: 8px; }
+.agenda-range { font-size: 12px; color: var(--muted); margin-left: 4px; }
+
+.agenda-notice { display: none; }
+
+.agenda {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 16px;
+  overflow-x: auto;
+  align-items: start;
+}
+
+.agenda-day {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+}
+.agenda-day--today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+.agenda-day__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.agenda-day__head b { font-size: 14px; color: var(--text); }
+.agenda-day__head em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.agenda-day__body { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.agenda-empty { font-size: 12px; color: var(--muted); margin: 4px 2px; }
+
+/* ---- 条目 ---- */
+
+.entry {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--entry-color, var(--muted));
+  background: var(--surface);
+  cursor: pointer;
+}
+.entry--google { cursor: default; background: transparent; border-left-color: var(--muted); }
+.entry--google .entry__title { color: var(--muted); font-weight: 500; }
+.entry--conflict { border-color: var(--danger); }
+
+.entry__time { font-size: 11px; color: var(--muted); white-space: nowrap; padding-top: 1px; }
+.entry__body { min-width: 0; flex: 1; }
+.entry__title {
+  margin: 0 0 3px;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.entry__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.entry__key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.entry__src { color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+.entry__synced { color: #16a34a; }
+.entry__where { overflow-wrap: anywhere; }
+.entry__link { color: var(--accent); }
+.entry__warn {
+  position: absolute;
+  top: 6px; right: 6px;
+  font-size: 10px;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* ---- 还没定时间 ---- */
+
+.agenda-pending {
+  border-top: 1px solid var(--border);
+  padding: 12px 16px 20px;
+}
+.agenda-pending h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.agenda-pending #agenda-pending-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px;
+}
+
+/* ---- Google 连接状态 ---- */
+
+.gstatus { font-size: 12px; }
+.gstatus--on { color: #16a34a; }
+.gstatus--off { color: var(--muted); }
+
+@media (max-width: 900px) {
+  .agenda { grid-template-columns: 1fr; }
+}

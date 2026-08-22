@@ -10,13 +10,14 @@ import (
 
 // 错误码：前端可据此做差异化提示。
 const (
-	CodeValidation        = "VALIDATION_ERROR"
-	CodeNotFound          = "NOT_FOUND"
-	CodeConflict          = "CONFLICT"
-	CodeInvalidTransition = "INVALID_TRANSITION"
-	CodeOwnerRequired     = "OWNER_REQUIRED"
-	CodeAIUnavailable     = "AI_UNAVAILABLE"
-	CodeInternal          = "INTERNAL"
+	CodeValidation         = "VALIDATION_ERROR"
+	CodeNotFound           = "NOT_FOUND"
+	CodeConflict           = "CONFLICT"
+	CodeInvalidTransition  = "INVALID_TRANSITION"
+	CodeOwnerRequired      = "OWNER_REQUIRED"
+	CodeAIUnavailable      = "AI_UNAVAILABLE"
+	CodeGoogleNotConnected = "GOOGLE_NOT_CONNECTED"
+	CodeInternal           = "INTERNAL"
 )
 
 // Error 是带 HTTP 语义的领域错误。

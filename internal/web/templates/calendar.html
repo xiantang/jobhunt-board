@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN" data-board="{{ .Board.Key }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>日程 · {{ .Board.Name }}</title>
+  <link rel="stylesheet" href="/static/board.css">
+  <link rel="stylesheet" href="/static/calendar.css">
+</head>
+<body class="page-calendar">
+  <header class="topbar">
+    <div class="topbar__title">
+      <span class="board-key">日程</span>
+      <h1>这一周</h1>
+      <p class="board-desc">看板上的面试和 Google 日历的会议放在一起，撞期一眼看得见</p>
+    </div>
+
+    <div class="agenda-nav">
+      <button type="button" class="btn btn--ghost" data-shift="-7">← 上一周</button>
+      <button type="button" class="btn btn--ghost" data-today>今天</button>
+      <button type="button" class="btn btn--ghost" data-shift="7">下一周 →</button>
+      <span class="agenda-range" id="agenda-range"></span>
+    </div>
+
+    <div class="whoami">
+      <a class="btn btn--ghost" href="/boards/{{ .Board.Key }}">← 回看板</a>
+      <span id="google-status"></span>
+    </div>
+  </header>
+
+  {{ if .Notice }}
+  <p class="agenda-notice" data-notice="{{ .Notice }}"></p>
+  {{ end }}
+
+  <main class="agenda" id="agenda"></main>
+
+  <section class="agenda-pending" id="agenda-pending" hidden>
+    <h4>还没定时间</h4>
+    <div id="agenda-pending-list"></div>
+  </section>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script id="agenda-data" type="application/json">{{ jsonify .Agenda }}</script>
+  <script src="/static/api.js"></script>
+  <script src="/static/calendar.js"></script>
+</body>
+</html>

@@ -24,6 +24,20 @@ OPENAI_API_KEY=sk-... go run ./cmd/server
 `OPENAI_BASE_URL`（默认 `https://api.openai.com/v1`）和 `OPENAI_MODEL`（默认 `gpt-4o-mini`）可选，
 指向任何 OpenAI 兼容网关都行。**不配 key 也能跑**，只是页面上不显示「✨ AI 录入」入口，其余功能不受影响。
 
+想把面试同步到 Google 日历，再配一组 OAuth 客户端：
+
+```bash
+GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com \
+GOOGLE_CLIENT_SECRET=xxx \
+GOOGLE_REDIRECT_URL=http://localhost:8080/oauth/google/callback \
+go run ./cmd/server
+```
+
+在 [Google Cloud Console](https://console.cloud.google.com/apis/credentials) 建一个
+**OAuth client ID（Web application）**，启用 Google Calendar API，把上面那个
+`GOOGLE_REDIRECT_URL` 原样填进「Authorized redirect URIs」——两边必须一字不差。
+**同样是不配也能跑**：日程页照常打开，只显示看板这一半。
+
 首次启动会自动建表并写入种子数据：一个看板 `JOBHUNT`、十个默认阶段、一名成员 `我`、四条示例流程，以及三条面试记录（分别覆盖「已排期」「已过期待回填」「已通过」三种形态）。
 
 > 如果本地还留着旧版任务看板的 `data/app.db`，删掉它再启动，才能拿到这套面试流程的种子数据。
@@ -55,6 +69,8 @@ internal/web/               页面模块：board.html + CSS/JS（go:embed），S
 internal/api/               接口模块：入参绑定、调用 service、组织响应
 internal/ingest/            AI 录入模块：把粘贴的文本解析成草稿，确认后再落库
 internal/ai/                OpenAI Chat Completions 客户端（标准库 net/http，无 SDK）
+internal/calendar/          日程模块：Google 授权保管、面试推成日程、两边拼成时间线
+internal/gcal/              Google OAuth2 + Calendar v3 客户端（同样是标准库直发）
 internal/board/             看板模块：看板信息 + 进展摘要统计
 internal/stage/             阶段模块：面试阶段的增删改序，workflow 的数据来源
 internal/member/            成员模块：成员列表、新增成员、解析「当前用户」
@@ -77,8 +93,10 @@ boards              一个看板 = 一套阶段配置 + 它下面的全部流程
 stages              可配置的面试阶段：key（稳定标识）、label（可改名）、kind、color、
                     requires_owner、skippable、position。按 board_id 隔离
 applications        一次投递：公司、岗位、渠道、备注、当前 stage_key、意向度、跟进人
+google_accounts     Google 日历的授权凭证，单用户只有一行（CHECK id = 1）
 interview_rounds    每一轮面试：stage_key + stage_label 快照、面试时间、时长、
-                    方式（线上/现场/电话）、会议链接、地点、面试官、结果、评价
+                    方式（线上/现场/电话）、会议链接、地点、面试官、结果、评价、
+                    google_event_id（在 Google 日历上对应的事件）
 application_events  操作日志
 members             可被指定为跟进人的成员
 ```
@@ -151,6 +169,41 @@ members             可被指定为跟进人的成员
 
 用 structured outputs（`response_format: json_schema`, `strict: true`）约束输出，省掉「模型偶尔多包一层 markdown」这类补丁逻辑。测试注入假模型，不打真网络。
 
+## 日程页与 Google 日历
+
+`/boards/:key/calendar`（看板顶部「📅 日程」进）。**默认一周一屏**，七列固定——
+空的那天也占一格，否则「这周哪天是空的」反而看不出来。上面铺两种东西：
+
+- **看板的面试**：按阶段配色，带流程编号、方式、结果；没同步的给一个「同步到日历」按钮
+- **Google 日历上已有的会议**：统一灰调，点标题跳去 Google
+
+**时间重叠的条目会被标上「撞期」**——这正是把两边放一起的意义。
+还没定时间的面试不在时间线上，单独列在底部提醒。
+
+### 同步方向：只推出去
+
+看板是事实源。排期 / 改期 / 把结果标成「已取消」/ 删除轮次，都会自动写回日历：
+
+| 看板上的动作 | 日历上发生什么 |
+|---|---|
+| 新排一场面试 | 建一条日程，event id 记在 `interview_rounds.google_event_id` |
+| 改时间 / 改会议信息 | 用记下的 event id 去 update |
+| 时间清空、标成已取消 | 把日程撤掉 |
+| 删除这一轮 | 删库之前先撤日程——删完就查不到 event id 了 |
+| 在 Google 那边手动删了日程 | update 撞 404，退回去重建一条 |
+
+**同步失败不让看板操作失败**：日历是外部系统，它挂了不该导致排期存不下来。
+出错只把原因挂在响应的 `calendar_warning` 里，前端弹一句提示，可以到日程页手动重试。
+同理，日历拉不回来时日程页只挂个 warning，看板的面试照常显示。
+
+### 凭证
+
+`google_accounts` 表只有一行（`CHECK (id = 1)`），存 refresh token。
+access token 过期时自动用 refresh token 换新的并落库。授权时带
+`access_type=offline&prompt=consent`——少了它 Google 只给一小时有效的 access token，
+重启就断；所以拿不到 refresh token 时当场报错，而不是先让人用上再突然失效。
+断开连接会一并清掉所有 `google_event_id`：换个账号再连，旧 id 指向的事件已经够不着了。
+
 ## 接口一览
 
 | 方法 | 路径 | 说明 |
@@ -173,6 +226,12 @@ members             可被指定为跟进人的成员
 | DELETE | `/api/applications/:id` | 删除流程（面试记录与操作日志一并清除）|
 | PATCH | `/api/rounds/:id` | 改期 / 补会议信息 / 回填结果与评价 |
 | DELETE | `/api/rounds/:id` | 删除一条面试记录 |
+| GET | `/api/agenda` | 日程数据：面试 + Google 日历，`?from=2026-08-24&days=7` |
+| GET | `/api/google/status` | Google 日历连接状态 |
+| POST | `/api/google/disconnect` | 断开 Google 日历 |
+| POST | `/api/rounds/:id/sync` | 手动把这一轮推到 Google 日历 |
+| GET | `/oauth/google/connect` | 302 到 Google 授权页（不在 `/api` 下，是浏览器跳转） |
+| GET | `/oauth/google/callback` | OAuth 回调，换 token 后跳回日程页 |
 | GET / POST | `/api/members` | 成员列表 / 新增成员 |
 | POST | `/api/session/member` | 切换「我是谁」，写 cookie |
 
@@ -197,6 +256,8 @@ members             可被指定为跟进人的成员
 
 ## 已实现的可选扩展
 
+- **日程页 + Google 日历双向可见**：`/boards/:key/calendar` 一周一屏，看板的面试和 Google 日历上已有的会议铺在同一条时间线上，时间重叠自动标「撞期」
+- **排期自动同步**：排期 / 改期 / 删除面试会自动写回 Google 日历，日历那边挂了也不影响看板保存
 - **AI 录入**：把 HR 邮件整段粘进来，自动抽出公司、岗位、阶段、时间与截止日期，生成草稿供确认
 - **阶段自由配置**：增删改序、改名换色、切换阶段类型、逐列开关「需跟进人」与「可跳过」，改完立刻生效
 - **每一轮面试独立记录**：时间、时长、线上会议链接 / 线下地点、面试官、结果、评价，详情抽屉里可查完整历史
@@ -215,6 +276,8 @@ members             可被指定为跟进人的成员
 - **流转规则的骨架（相邻 + 可跳过 + 终态直达）是硬编码的**，可配置的只有阶段列表和每列的两个开关。做成「每个阶段自定义允许的下一步」会让配置界面复杂得多，而面试流程本身就是线性的，「可跳过」已经覆盖了「这家公司没有在线测评」这类主要诉求。
 - **AI 录入不自动落库**：解析和确认拆成两个接口，多一次点击，换来「模型出错不会污染看板」。也没做「自动定时扫邮箱」——那要接 IMAP / OAuth，超出本轮范围，粘贴已经覆盖主要场景。
 - **AI 只做抽取，不做决策**：阶段是它从给定列表里选的，选错了界面上改一下就行；流转合不合法仍由 `workflow` 判定，模型说了不算。
+- **日历只推不拉**：Google 那边改了时间不会回流到看板。双向同步要存 etag、处理冲突、加轮询或 webhook，复杂度翻倍，而看板本来就是事实源。日程页把两边并排显示，已经能看出「日历上被人改了」。
+- **日程同步是尽力而为，不进事务**：SQLite 事务包不住外部 HTTP 调用。宁可出现「看板存了、日历没同步」并把原因显式告诉用户，也不要为了原子性把排期回滚掉。
 - **不做登录鉴权**：用 cookie 表达「当前是谁」。
 - **单看板为主**：数据模型和路由都按多看板设计（`/boards/:key`），但没做看板管理页面，首页直接跳转到默认看板。
 - **无并发冲突处理**：两人同时编辑同一条流程是后写覆盖先写。后续可用 `updated_at` 做乐观锁。

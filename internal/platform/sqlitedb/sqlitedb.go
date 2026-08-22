@@ -53,6 +53,9 @@ func Migrate(db *sql.DB) error {
 	if _, err := addColumn(db, "stages", "skippable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if _, err := addColumn(db, "interview_rounds", "google_event_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := once(db, "skippable_defaults", backfillSkippable); err != nil {
 		return err
 	}

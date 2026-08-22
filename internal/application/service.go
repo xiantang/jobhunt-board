@@ -736,3 +736,25 @@ func whenSuffix(t *time.Time) string {
 	}
 	return "，时间 " + whenText(t)
 }
+
+// ---------- 日程 ----------
+
+// UpcomingRounds 返回 [from, to) 内已排期的面试（跨看板）。
+func (s *Service) UpcomingRounds(ctx context.Context, from, to time.Time) ([]ScheduledRound, error) {
+	return s.repo.upcomingRounds(ctx, from, to)
+}
+
+// UnscheduledRounds 返回还没定时间的待进行面试。
+func (s *Service) UnscheduledRounds(ctx context.Context) ([]ScheduledRound, error) {
+	return s.repo.unscheduledRounds(ctx)
+}
+
+// RoundForSync 返回一轮面试连同它所属流程的展示信息。
+func (s *Service) RoundForSync(ctx context.Context, roundID int64) (ScheduledRound, error) {
+	return s.repo.scheduledRound(ctx, roundID)
+}
+
+// SetGoogleEventID 记下这一轮在 Google 日历上对应的事件。
+func (s *Service) SetGoogleEventID(ctx context.Context, roundID int64, eventID string) error {
+	return s.repo.setGoogleEventID(ctx, roundID, eventID)
+}

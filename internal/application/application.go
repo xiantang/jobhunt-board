@@ -95,6 +95,30 @@ type Round struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
+// ScheduledRound 是一轮面试连同它所属流程的展示信息。
+// 日程页要跨看板按时间铺开，光有 Round 拼不出「哪家公司的第几面」，
+// 所以这里把 join 出来的字段一并带上。
+type ScheduledRound struct {
+	RoundID        int64      `json:"round_id"`
+	ApplicationID  int64      `json:"application_id"`
+	ApplicationKey string     `json:"application_key"`
+	BoardKey       string     `json:"board_key"`
+	Company        string     `json:"company"`
+	Role           string     `json:"role"`
+	StageKey       string     `json:"stage_key"`
+	StageLabel     string     `json:"stage_label"`
+	StageColor     string     `json:"stage_color"`
+	ScheduledAt    *time.Time `json:"scheduled_at"`
+	DurationMin    int        `json:"duration_min"`
+	Mode           string     `json:"mode"`
+	MeetingURL     string     `json:"meeting_url"`
+	MeetingPlace   string     `json:"meeting_place"`
+	Interviewer    string     `json:"interviewer"`
+	Result         string     `json:"result"`
+	Notes          string     `json:"notes"`
+	GoogleEventID  string     `json:"google_event_id"`
+}
+
 // 面试方式取值。
 const (
 	ModeOnline = "online"

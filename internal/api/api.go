@@ -10,6 +10,7 @@ import (
 
 	"interview/internal/application"
 	"interview/internal/board"
+	"interview/internal/calendar"
 	"interview/internal/ingest"
 	"interview/internal/member"
 	"interview/internal/platform/apperr"
@@ -25,13 +26,20 @@ type Handler struct {
 	Stages       *stage.Service
 	Applications *application.Service
 	Ingest       *ingest.Service
+	Calendar     *calendar.Service
 }
 
 // New 构造 API handler。
 func New(members *member.Service, boards *board.Service, stages *stage.Service,
-	apps *application.Service, ai *ingest.Service) *Handler {
-	return &Handler{Members: members, Boards: boards, Stages: stages, Applications: apps, Ingest: ai}
+	apps *application.Service, ai *ingest.Service, cal *calendar.Service) *Handler {
+	return &Handler{
+		Members: members, Boards: boards, Stages: stages,
+		Applications: apps, Ingest: ai, Calendar: cal,
+	}
 }
+
+// CalendarEnabled 表示配了 Google OAuth 客户端，页面上才显示日程入口。
+func (h *Handler) CalendarEnabled() bool { return h.Calendar != nil && h.Calendar.Enabled() }
 
 // AIEnabled 表示 AI 录入可用，页面据此决定要不要显示入口。
 func (h *Handler) AIEnabled() bool { return h.Ingest != nil && h.Ingest.Available() }
@@ -58,6 +66,11 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 	r.PATCH("/rounds/:id", h.UpdateRound)
 	r.DELETE("/rounds/:id", h.DeleteRound)
+
+	r.GET("/agenda", h.GetAgenda)
+	r.GET("/google/status", h.GoogleStatus)
+	r.POST("/google/disconnect", h.GoogleDisconnect)
+	r.POST("/rounds/:id/sync", h.SyncRound)
 
 	r.GET("/members", h.ListMembers)
 	r.POST("/members", h.CreateMember)
@@ -523,7 +536,9 @@ func (h *Handler) ScheduleRound(c *gin.Context) {
 		ginx.Fail(c, err)
 		return
 	}
-	h.respondWithRound(c, created.ApplicationID, gin.H{"round": created}, true)
+	payload := gin.H{"round": created}
+	h.autoSync(c, created.ID, payload)
+	h.respondWithRound(c, created.ApplicationID, payload, true)
 }
 
 // UpdateRound 改期、补会议信息或回填面试结果。
@@ -559,7 +574,9 @@ func (h *Handler) UpdateRound(c *gin.Context) {
 		ginx.Fail(c, err)
 		return
 	}
-	h.respondWithRound(c, updated.ApplicationID, gin.H{"round": updated}, false)
+	payload := gin.H{"round": updated}
+	h.autoSync(c, updated.ID, payload)
+	h.respondWithRound(c, updated.ApplicationID, payload, false)
 }
 
 // DeleteRound 删除一条面试记录。
@@ -569,6 +586,7 @@ func (h *Handler) DeleteRound(c *gin.Context) {
 		ginx.Fail(c, err)
 		return
 	}
+	h.autoUnsync(c, id) // 删库之后就查不到 google_event_id 了，得先撤日程
 	applicationID, err := h.Applications.DeleteRound(c.Request.Context(), id, ginx.ActorID(c))
 	if err != nil {
 		ginx.Fail(c, err)

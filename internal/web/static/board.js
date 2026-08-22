@@ -163,6 +163,11 @@
       columns.map((c) => link(c.key, c.label)).join('');
   }
 
+  // 排期同步到 Google 日历是尽力而为，失败了只提示，不影响已经保存的排期。
+  function warnCalendar(data) {
+    if (data && data.calendar_warning) API.toast(data.calendar_warning);
+  }
+
   async function refresh() {
     try {
       renderBoard(await API.get(`/api/boards/${boardKey}/board${query}`));
@@ -388,6 +393,7 @@
       renderBoard(data.board);
       renderRounds(data.rounds);
       API.toast('已添加一场待安排的面试', true);
+      warnCalendar(data);
     } catch (err) {
       API.toast(err.message);
     }
@@ -414,6 +420,7 @@
         renderBoard(data.board);
         renderRounds(data.rounds);
         API.toast('面试信息已保存', true);
+        warnCalendar(data);
       } catch (err) {
         API.toast(err.message);
       }
@@ -675,6 +682,7 @@
         parseForm.text.value = '';
         draftEl.hidden = true;
         API.toast(`${data.created ? '已创建' : '已更新'} ${data.application.key}`, true);
+        warnCalendar(data);
       } catch (err) {
         API.toast(err.message);
       }
@@ -716,4 +724,8 @@
   }
 
   hydrateMoves(); // 首屏卡片由模板渲染，这里补上流转下拉
+
+  // 日程页点面试会跳回来带上 ?open=，直接把那张卡的抽屉打开。
+  const openParam = new URLSearchParams(location.search).get('open');
+  if (openParam) openDrawer(openParam);
 })();

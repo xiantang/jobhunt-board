@@ -67,11 +67,34 @@ func NewHandler(apiHandler *api.Handler, members *member.Service) *Handler {
 func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/", h.Home)
 	r.GET("/boards/:key", h.Board)
+	r.GET("/boards/:key/calendar", h.Calendar)
 }
 
 // Home 跳转到默认看板。
 func (h *Handler) Home(c *gin.Context) {
 	c.Redirect(http.StatusFound, "/boards/"+board.DefaultKey)
+}
+
+// Calendar 渲染日程页：看板的面试 + Google 日历的会议，默认一周。
+// 和看板页一样服务端渲染首屏，翻周之后交给 JS 重绘。
+func (h *Handler) Calendar(c *gin.Context) {
+	b, err := h.api.Boards.GetByKey(c.Request.Context(), c.Param("key"))
+	if err != nil {
+		ginx.Fail(c, err)
+		return
+	}
+	agenda, err := h.api.Agenda(c)
+	if err != nil {
+		ginx.Fail(c, err)
+		return
+	}
+
+	c.HTML(http.StatusOK, "calendar.html", gin.H{
+		"Board":  b,
+		"Agenda": agenda,
+		// notice 是 OAuth 回调跳回来时带的结果，页面上给一句提示。
+		"Notice": c.Query("google"),
+	})
 }
 
 // kindOption 是阶段类型下拉的一项。
@@ -109,6 +132,7 @@ func (h *Handler) Board(c *gin.Context) {
 		"Kinds":           kinds,
 		"CurrentMemberID": ginx.ActorID(c),
 		"AIEnabled":       h.api.AIEnabled(),
+		"CalendarEnabled": h.api.CalendarEnabled(),
 		"FilterStage":     c.DefaultQuery("stage", "all"),
 		"FilterOwner":     c.DefaultQuery("owner", "all"),
 		"FilterUpcoming":  c.Query("upcoming") == "1",
