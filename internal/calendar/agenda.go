@@ -13,8 +13,14 @@ import (
 // 时间线上的两种来源。
 const (
 	SourceInterview = "interview" // 看板上的面试
+	SourceTask      = "task"      // 看板上的任务（在线测评这类），时间是 DDL
 	SourceGoogle    = "google"    // Google 日历上已有的会议
 )
+
+// TaskBlockMin 是任务在日程上占的名义时长。
+// DDL 是一个时刻不是一段时间，但网格得有高度才画得出来——
+// 让这一格「结束于 DDL」，看上去就是截止线压在那个时刻上。
+const TaskBlockMin = 30
 
 // Entry 是时间线上的一格，两种来源共用一个结构，前端只按 source 换配色。
 type Entry struct {
@@ -38,6 +44,10 @@ type Entry struct {
 	// 共有的会议信息
 	Location string `json:"location,omitempty"`
 	URL      string `json:"url,omitempty"`
+
+	// Due 是任务的截止时刻（只有 source=task 有）。Start/End 是为了画格子
+	// 推出来的名义区间，真正有意义的时刻是这一个。
+	Due *time.Time `json:"due,omitempty"`
 
 	// Conflict 表示这一格和同一天的另一格时间重叠。
 	Conflict bool `json:"conflict"`
@@ -147,8 +157,12 @@ func dropOwnEvents(events []gcal.Event, rounds []application.ScheduledRound) []g
 }
 
 func interviewEntry(r application.ScheduledRound) Entry {
+	source := SourceInterview
+	if r.IsTask() {
+		source = SourceTask
+	}
 	e := Entry{
-		Source:         SourceInterview,
+		Source:         source,
 		RoundID:        r.RoundID,
 		Title:          r.Company + " · " + r.StageLabel,
 		Company:        r.Company,
@@ -163,8 +177,15 @@ func interviewEntry(r application.ScheduledRound) Entry {
 		Synced:         r.GoogleEventID != "",
 	}
 	if r.ScheduledAt != nil {
-		e.Start = *r.ScheduledAt
-		e.End = r.ScheduledAt.Add(time.Duration(r.DurationMin) * time.Minute)
+		if r.IsTask() {
+			// 任务的 ScheduledAt 是截止时刻，所以这一格结束在那里，往前留出高度。
+			e.End = *r.ScheduledAt
+			e.Start = e.End.Add(-TaskBlockMin * time.Minute)
+			e.Due = r.ScheduledAt
+		} else {
+			e.Start = *r.ScheduledAt
+			e.End = r.ScheduledAt.Add(time.Duration(r.DurationMin) * time.Minute)
+		}
 	}
 	return e
 }
@@ -218,13 +239,15 @@ func bucketByDay(entries []Entry, from time.Time, days int) []Day {
 
 // markConflicts 标出同一天里时间重叠的条目。
 // 这正是「两边一起看」的意义：面试和已有会议撞上了，得看得见。
+// 任务不参与撞期判定：DDL 是「这之前做完」，不是「这个时段被占住」，
+// 它和同时刻的面试并不冲突。
 func markConflicts(entries []Entry) {
 	for i := range entries {
-		if entries[i].AllDay {
+		if entries[i].AllDay || entries[i].Source == SourceTask {
 			continue
 		}
 		for j := range entries {
-			if i == j || entries[j].AllDay {
+			if i == j || entries[j].AllDay || entries[j].Source == SourceTask {
 				continue
 			}
 			if entries[i].Start.Before(entries[j].End) && entries[j].Start.Before(entries[i].End) {

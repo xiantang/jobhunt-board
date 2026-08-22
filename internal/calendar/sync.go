@@ -74,27 +74,45 @@ func (s *Service) removeEvent(ctx context.Context, roundID int64, eventID string
 	return s.rounds.SetGoogleEventID(ctx, roundID, "")
 }
 
-// eventInput 把一轮面试翻译成一条日程。
-// 标题带上「面试」两个字，是为了在一堆会议里一眼认出来。
+// eventInput 把一轮面试 / 一条任务翻译成一条日程。
+// 标题带上「面试」「截止」这样的前缀，是为了在一堆会议里一眼认出来。
+//
+// 任务的 ScheduledAt 是 DDL：日程结束在那个时刻、往前占 TaskBlockMin 分钟，
+// 这样在 Google 日历上看到的就是「截止线压在 18:00」，而不是「18:00 开始干活」。
 func eventInput(r application.ScheduledRound) gcal.EventInput {
 	start := *r.ScheduledAt
 	duration := time.Duration(r.DurationMin) * time.Minute
 	if duration <= 0 {
 		duration = time.Hour
 	}
-
-	title := fmt.Sprintf("面试：%s · %s", r.Company, r.StageLabel)
-	if r.Role != "" {
-		title = fmt.Sprintf("面试：%s %s · %s", r.Company, r.Role, r.StageLabel)
+	if r.IsTask() {
+		duration = TaskBlockMin * time.Minute
+		start = r.ScheduledAt.Add(-duration)
 	}
+
+	what, subject := "面试", r.Company
+	if r.IsTask() {
+		what = "截止"
+	}
+	if r.Role != "" {
+		subject = r.Company + " " + r.Role
+	}
+	title := fmt.Sprintf("%s：%s · %s", what, subject, r.StageLabel)
 
 	var desc strings.Builder
 	fmt.Fprintf(&desc, "看板流程：%s\n", r.ApplicationKey)
+	if r.IsTask() && r.ScheduledAt != nil {
+		fmt.Fprintf(&desc, "截止时间：%s\n", r.ScheduledAt.Local().Format("2006-01-02 15:04"))
+	}
 	if r.Interviewer != "" {
 		fmt.Fprintf(&desc, "面试官：%s\n", r.Interviewer)
 	}
 	if r.MeetingURL != "" {
-		fmt.Fprintf(&desc, "会议链接：%s\n", r.MeetingURL)
+		label := "会议链接"
+		if r.IsTask() {
+			label = "测评链接"
+		}
+		fmt.Fprintf(&desc, "%s：%s\n", label, r.MeetingURL)
 	}
 	if r.Notes != "" {
 		fmt.Fprintf(&desc, "\n%s\n", r.Notes)
