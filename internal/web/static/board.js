@@ -516,6 +516,13 @@
 
   // ---------- 成员 ----------
 
+  // currentMemberID 读顶部「我是」下拉的当前值，0 表示读不到。
+  // 它是这一页「我是谁」的唯一来源，切换后无需刷新页面即可生效。
+  function currentMemberID() {
+    const el = document.getElementById('current-member');
+    return el ? Number(el.value) || 0 : 0;
+  }
+
   document.getElementById('current-member').addEventListener('change', async (e) => {
     try {
       const data = await API.post('/api/session/member', { member_id: Number(e.target.value) });
@@ -592,7 +599,9 @@
       confirmForm.channel.value = d.channel || (d.match ? d.match.channel : '');
       confirmForm.notes.value = d.notes || '';
       confirmForm.intent.value = d.match ? d.match.intent : 'normal';
-      confirmForm.owner_id.value = String((d.match && d.match.owner_id) || 0);
+      // 跟进人默认是「我」——AI 录入是本人在录自己的面试。
+      // 命中已有卡片时以那张卡上已有的跟进人为准，不覆盖。
+      confirmForm.owner_id.value = String((d.match && d.match.owner_id) || currentMemberID());
       fillStageOptions(d.stage_allowed ? d.stage_key : '', !!d.match);
 
       const r = d.round || {};
@@ -648,7 +657,7 @@
           role: confirmForm.role.value.trim(),
           channel: confirmForm.channel.value.trim(),
           notes: confirmForm.notes.value.trim(),
-          owner_id: owner > 0 ? owner : null,
+          owner_id: owner, // 显式传 0：用户真的选了「未指定」，别被后端的默认值盖掉
           intent: confirmForm.intent.value,
           stage_key: confirmForm.stage_key.value,
           create_round: withRound,

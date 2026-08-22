@@ -283,3 +283,37 @@ func TestCreateAtStageStillRequiresOwner(t *testing.T) {
 		t.Fatalf("未知阶段应当返回 400：%d %v", code, body)
 	}
 }
+
+// AI 录入是本人在录自己的面试，跟进人默认落在当前用户身上。
+func TestIngestConfirmDefaultsOwnerToActor(t *testing.T) {
+	r := setupWithModel(t, &fakeModel{reply: foodpandaReply})
+
+	// 不传 owner_id：兜底成当前用户，「一面」的 requires_owner 也就自然满足了。
+	code, body := do(t, r, http.MethodPost, "/api/boards/JOBHUNT/ingest/confirm", map[string]any{
+		"company":   "默认跟进人公司",
+		"stage_key": "round_1",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("确认录入返回 %d：%v", code, body)
+	}
+	app := body["application"].(map[string]any)
+	if app["owner_id"] == nil {
+		t.Fatalf("跟进人应当默认是当前用户：%v", app)
+	}
+	if got := app["owner"].(map[string]any)["name"]; got != "我" {
+		t.Fatalf("跟进人 = %v，期望「我」", got)
+	}
+
+	// 显式传 0 表示「就是不要跟进人」，不该被默认值盖掉。
+	code, body = do(t, r, http.MethodPost, "/api/boards/JOBHUNT/ingest/confirm", map[string]any{
+		"company":   "不要跟进人公司",
+		"owner_id":  0,
+		"stage_key": "online_test",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("确认录入返回 %d：%v", code, body)
+	}
+	if got := body["application"].(map[string]any)["owner_id"]; got != nil {
+		t.Fatalf("显式选了「未指定」，不该被兜底成当前用户：%v", got)
+	}
+}

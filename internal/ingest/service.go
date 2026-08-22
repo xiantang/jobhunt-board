@@ -165,6 +165,12 @@ func (s *Service) Confirm(ctx context.Context, boardID int64, in ConfirmInput, a
 		err error
 	)
 
+	// 跟进人默认是当前用户：AI 录入是本人在录自己的面试。
+	// 只在字段整个没传时兜底——显式传 0 表示「就是不要跟进人」，得留给用户。
+	if in.OwnerID == nil && actorID > 0 {
+		in.OwnerID = &actorID
+	}
+
 	if in.ApplicationID > 0 {
 		res.Application, err = s.apps.Get(ctx, in.ApplicationID)
 		if err != nil {
