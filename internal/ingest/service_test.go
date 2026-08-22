@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -9,17 +10,26 @@ import (
 	"interview/internal/workflow"
 )
 
-func TestNormalizeCompany(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"foodpanda", "foodpanda"},
-		{"Foodpanda 台湾", "foodpanda台湾"},
-		{"字节跳动有限公司", "字节跳动"},
-		{"Acme Inc.", "acme"},
-		{"  ", ""},
+func TestParseCompany(t *testing.T) {
+	cases := []struct {
+		in     string
+		canon  string
+		tokens []string
+	}{
+		{"foodpanda", "foodpanda", []string{"foodpanda"}},
+		{"Foodpanda 台湾", "foodpanda台湾", []string{"foodpanda", "台湾"}},
+		{"字节跳动有限公司", "字节跳动", []string{"字节跳动"}},
+		{"Acme Inc.", "acme", []string{"acme"}},
+		{"Anker Innovations", "ankerinnovations", []string{"anker", "innovations"}},
+		{"  ", "", nil},
 	}
 	for _, c := range cases {
-		if got := normalizeCompany(c.in); got != c.want {
-			t.Errorf("normalizeCompany(%q) = %q，期望 %q", c.in, got, c.want)
+		got := parseCompany(c.in)
+		if got.canonical != c.canon {
+			t.Errorf("parseCompany(%q).canonical = %q，期望 %q", c.in, got.canonical, c.canon)
+		}
+		if strings.Join(got.tokens, "|") != strings.Join(c.tokens, "|") {
+			t.Errorf("parseCompany(%q).tokens = %v，期望 %v", c.in, got.tokens, c.tokens)
 		}
 	}
 }
@@ -28,20 +38,43 @@ func TestMatchCompany(t *testing.T) {
 	existing := []application.Application{
 		{ID: 1, Company: "Foodpanda 台湾"},
 		{ID: 2, Company: "字节跳动"},
+		{ID: 3, Company: "Bitdeer"},
+		{ID: 4, Company: "易点天下网络科技股份有限公司"},
+		{ID: 5, Company: "Anker Innovations"},
 	}
 
-	if got := matchCompany("foodpanda", existing); got == nil || got.ID != 1 {
-		t.Fatalf("「foodpanda」应当命中 Foodpanda 台湾：%v", got)
+	hit := []struct {
+		name string
+		want int64
+	}{
+		{"foodpanda", 1}, // 整词命中「Foodpanda 台湾」里的一个词
+		{"FoodPanda", 1}, // 大小写无关
+		{"字节跳动有限公司", 2},  // 后缀不参与比较
+		{"Bitdeer", 3},   // 精确
+		{"易点天下", 4},      // 中文前缀：字号 + 业务描述说的是同一家
+		{"Anker", 5},     // 整词命中多词名字里的一个
 	}
-	if got := matchCompany("字节跳动有限公司", existing); got == nil || got.ID != 2 {
-		t.Fatalf("去掉后缀后应当精确命中：%v", got)
+	for _, c := range hit {
+		got := matchCompany(c.name, existing)
+		if got == nil || got.ID != c.want {
+			t.Errorf("matchCompany(%q) = %v，期望命中 id=%d", c.name, got, c.want)
+		}
 	}
-	if got := matchCompany("美团", existing); got != nil {
-		t.Fatalf("不相干的公司不该命中：%v", got)
+
+	miss := []string{
+		"BIT",          // 不是 Bitdeer 的简写，只是恰好是它的前缀
+		"Bit",          //
+		"Deer",         // 后缀同理，英文不做部分词匹配
+		"美团",           // 完全不相干
+		"中",            // 单字不参与前缀匹配
+		"Innovations",  // 通用后缀词，不是字号——字号在最前面
+		"台湾",           // 同理，Foodpanda 台湾 的身份是 foodpanda
+		"foodpanda 香港", // 首词对上了，但其余的词对不上，不是同一家
 	}
-	// 两个字的名字用包含匹配太容易误伤，只走精确匹配。
-	if got := matchCompany("台湾", existing); got != nil {
-		t.Fatalf("过短的名字不该走包含匹配：%v", got)
+	for _, name := range miss {
+		if got := matchCompany(name, existing); got != nil {
+			t.Errorf("matchCompany(%q) 不该命中，实际命中了「%s」", name, got.Company)
+		}
 	}
 }
 

@@ -296,45 +296,145 @@ func fillGaps(current application.Application, in ConfirmInput) (application.Upd
 }
 
 // matchCompany 在本看板已有卡片里找同一家公司。
-// 先精确匹配规整后的名字，再退到包含关系（「foodpanda」对上「Foodpanda 台湾」）。
+// 先精确匹配规整后的名字，再退到一次宽松匹配（见 looseMatch）。
 func matchCompany(company string, existing []application.Application) *application.Application {
-	key := normalizeCompany(company)
-	if key == "" {
+	key := parseCompany(company)
+	if key.empty() {
 		return nil
 	}
 	for i, a := range existing {
-		if normalizeCompany(a.Company) == key {
+		if key.canonical == parseCompany(a.Company).canonical {
 			return &existing[i]
 		}
 	}
-	if len([]rune(key)) < 3 {
-		return nil // 太短的名字用包含匹配容易误伤
-	}
 	for i, a := range existing {
-		other := normalizeCompany(a.Company)
-		if other == "" {
+		other := parseCompany(a.Company)
+		if other.empty() {
 			continue
 		}
-		if strings.Contains(other, key) || strings.Contains(key, other) {
+		if looseMatch(key, other) || looseMatch(other, key) {
 			return &existing[i]
 		}
 	}
 	return nil
 }
 
-// normalizeCompany 规整公司名用于比较：转小写、去掉空白与标点、抹掉常见后缀。
-func normalizeCompany(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	for _, suffix := range []string{"股份有限公司", "有限责任公司", "有限公司", "科技有限公司", "集团", "公司", " inc", " ltd", " llc", " corp"} {
-		s = strings.ReplaceAll(s, suffix, "")
+// companyName 是规整过的公司名。
+// canonical 去掉了所有分隔符，只用来判等；tokens 保留词的边界，宽松匹配靠它。
+type companyName struct {
+	canonical string
+	tokens    []string
+}
+
+func (c companyName) empty() bool { return c.canonical == "" }
+
+// looseMatch 判断 short 是不是 long 的一种简写。两条要求：
+//
+//  1. 首词必须对上。公司名不管中英文都是「字号 + 业务描述」，
+//     字号在最前面，它才是身份。所以 Anker 命中 Anker Innovations，
+//     而 Innovations 不命中——后者只是个通用后缀词。
+//  2. 其余的词也都要能在 long 里找到，免得 foodpanda 香港 命中 foodpanda 台湾。
+//
+// 「对上」的标准按语种分开，这正是 BIT 不该命中 Bitdeer
+// 而 易点天下 该命中 易点天下网络科技 的原因：
+//
+//   - 拉丁词必须整词相等。英文靠空格分词，bit 和 bitdeer 是两个不同的词，
+//     前者恰好是后者的前缀纯属巧合，按前缀匹配会把毫不相干的公司凑成一对。
+//   - 中文词允许前缀（至少两个字）。中文公司名不加空格，
+//     易点天下 / 易点天下网络科技 说的就是同一家，这里的前缀是有意义的。
+func looseMatch(short, long companyName) bool {
+	if len(short.tokens) == 0 || len(long.tokens) == 0 {
+		return false
 	}
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
+	if len([]rune(short.canonical)) < 2 || len(short.tokens) > len(long.tokens) {
+		return false
+	}
+	if !covers(short.tokens[0], long.tokens[0]) {
+		return false
+	}
+	for _, t := range short.tokens[1:] {
+		if !coveredBy(t, long.tokens) {
+			return false
 		}
 	}
-	return b.String()
+	return true
+}
+
+func coveredBy(token string, candidates []string) bool {
+	for _, c := range candidates {
+		if covers(token, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// covers 判断 token 能不能代表 candidate。
+func covers(token, candidate string) bool {
+	if token == candidate {
+		return true
+	}
+	// 前缀这条只对中文开放，且至少两个字，免得「中」命中「中国移动」。
+	return isCJK(token) && isCJK(candidate) &&
+		len([]rune(token)) >= 2 && strings.HasPrefix(candidate, token)
+}
+
+// companySuffixes 是判断「是不是同一家」时不该参与比较的部分。
+var companySuffixes = []string{
+	"股份有限公司", "有限责任公司", "科技有限公司", "有限公司", "集团", "公司",
+	" inc", " inc.", " ltd", " ltd.", " llc", " corp", " corp.", " co.", " gmbh", " limited",
+}
+
+// parseCompany 规整公司名：转小写、抹掉常见后缀，再切成词。
+// 切词同时按分隔符和中英文边界断开，所以「Foodpanda 台湾」会切成
+// [foodpanda 台湾]，「foodpanda」才能作为一个完整的词命中它。
+func parseCompany(s string) companyName {
+	s = strings.ToLower(strings.TrimSpace(s))
+	for _, suffix := range companySuffixes {
+		s = strings.ReplaceAll(s, suffix, " ")
+	}
+
+	var (
+		out     companyName
+		canon   strings.Builder
+		token   strings.Builder
+		prevCJK bool
+	)
+	flush := func() {
+		if token.Len() > 0 {
+			out.tokens = append(out.tokens, token.String())
+			token.Reset()
+		}
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			flush()
+			prevCJK = false
+			continue
+		}
+		if cjk := isCJKRune(r); token.Len() > 0 && cjk != prevCJK {
+			flush() // 中英文交界也是一处词边界
+		} else if token.Len() == 0 {
+			prevCJK = isCJKRune(r)
+		}
+		prevCJK = isCJKRune(r)
+		token.WriteRune(r)
+		canon.WriteRune(r)
+	}
+	flush()
+	out.canonical = canon.String()
+	return out
+}
+
+func isCJK(s string) bool {
+	for _, r := range s {
+		return isCJKRune(r)
+	}
+	return false
+}
+
+func isCJKRune(r rune) bool {
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r)
 }
 
 // parseTime 解析模型给的时间。它偶尔会漏掉时区或只给到分钟，这里都兜住；
