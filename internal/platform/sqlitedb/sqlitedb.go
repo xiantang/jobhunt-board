@@ -53,7 +53,46 @@ func Migrate(db *sql.DB) error {
 	if _, err := addColumn(db, "stages", "skippable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return once(db, "skippable_defaults", backfillSkippable)
+	if err := once(db, "skippable_defaults", backfillSkippable); err != nil {
+		return err
+	}
+	return once(db, "solo_member", collapseSeedMembers)
+}
+
+// SoloMemberName 是默认成员名——这个看板是一个人在用，操作日志和卡片头像都显示它。
+const SoloMemberName = "我"
+
+// collapseSeedMembers 把老库里的演示成员收成一个人。
+//
+// 早期种子写了 A / B / C 三个人，但这是个人求职看板，A 就是本人。
+// 这里把 A 改名成「我」，B / C 没有任何流程和日志时删掉——
+// 有引用就留着，宁可界面上多两个名字，也不要把历史记录的作者抹成空。
+func collapseSeedMembers(db *sql.DB) error {
+	// 只在成员表看起来还是那份种子数据时动手，免得误伤真给成员起名叫 A 的库。
+	var total, seeded int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM members`).Scan(&total); err != nil {
+		return fmt.Errorf("统计成员失败: %w", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM members WHERE name IN ('A', 'B', 'C')`).Scan(&seeded); err != nil {
+		return fmt.Errorf("统计种子成员失败: %w", err)
+	}
+	if total != 3 || seeded != 3 {
+		return nil
+	}
+
+	if _, err := db.Exec(`UPDATE members SET name = ?, role = 'lead' WHERE name = 'A'`, SoloMemberName); err != nil {
+		return fmt.Errorf("重命名成员 A 失败: %w", err)
+	}
+	// 只删真正没被用过的：owner_id 是 ON DELETE SET NULL，
+	// 直接删会把卡片的跟进人和日志作者悄悄清空。
+	if _, err := db.Exec(`
+		DELETE FROM members
+		WHERE name IN ('B', 'C')
+		  AND id NOT IN (SELECT owner_id FROM applications WHERE owner_id IS NOT NULL)
+		  AND id NOT IN (SELECT actor_id FROM application_events WHERE actor_id IS NOT NULL)`); err != nil {
+		return fmt.Errorf("删除未使用的种子成员失败: %w", err)
+	}
+	return nil
 }
 
 // once 保证一段数据修补在同一个库上只跑一次，跑过的记在 migrations 表里。
@@ -187,10 +226,10 @@ func Seed(db *sql.DB) error {
 		}
 	}
 
+	// 这是一个人自己用的求职看板，成员表里就一条：本人。
+	// 「跟进人」这套字段保留着，将来想拉人一起用不用改数据模型。
 	members := []struct{ name, role, color string }{
-		{"A", "lead", "#2563eb"},
-		{"B", "member", "#16a34a"},
-		{"C", "member", "#d97706"},
+		{SoloMemberName, "lead", "#2563eb"},
 	}
 	ids := make([]int64, 0, len(members))
 	for _, m := range members {
@@ -208,10 +247,10 @@ func Seed(db *sql.DB) error {
 		owner                                        int64
 	}{
 		{"百度", "后端研发工程师", "内推", "内推码已用，简历已过初筛", "round_2", "high", ids[0]},
-		{"某电商", "Go 开发", "官网投递", "在线测评 90 分钟，限时", "online_test", "normal", ids[1]},
+		{"某电商", "Go 开发", "官网投递", "在线测评 90 分钟，限时", "online_test", "normal", ids[0]},
 		{"某创业公司", "基础架构", "猎头", "HRBP 沟通薪资中", "hrbp", "high", ids[0]},
-		{"某外企", "平台工程", "官网投递", "面试官反馈方向不匹配", "rejected", "low", ids[2]},
-		{"某游戏公司", "服务端开发", "内推", "一面还没约上时间", "round_1", "normal", ids[1]},
+		{"某外企", "平台工程", "官网投递", "面试官反馈方向不匹配", "rejected", "low", ids[0]},
+		{"某游戏公司", "服务端开发", "内推", "一面还没约上时间", "round_1", "normal", ids[0]},
 	}
 	appIDs := make([]int64, 0, len(applications))
 	for i, a := range applications {

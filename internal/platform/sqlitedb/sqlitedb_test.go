@@ -145,3 +145,115 @@ func skippableOf(t *testing.T, db *sql.DB, key string) int {
 	}
 	return v
 }
+
+// TestMigrateCollapsesSeedMembers：老库里的 A / B / C 是演示数据，
+// A 就是本人，改名成「我」；B / C 没被用过就删掉，用过就留着。
+func TestMigrateCollapsesSeedMembers(t *testing.T) {
+	t.Run("B/C 没被用过就删掉", func(t *testing.T) {
+		db := openWithSeedMembers(t, 0)
+		defer db.Close()
+
+		names := memberNames(t, db)
+		if len(names) != 1 || names[0] != SoloMemberName {
+			t.Fatalf("成员应当只剩「%s」，实际 %v", SoloMemberName, names)
+		}
+	})
+
+	t.Run("被引用的成员留着", func(t *testing.T) {
+		db := openWithSeedMembers(t, 2) // B 名下挂了一条流程
+		defer db.Close()
+
+		names := memberNames(t, db)
+		if len(names) != 2 {
+			t.Fatalf("有引用的成员不该被删，实际 %v", names)
+		}
+		// 卡片的跟进人不能被 ON DELETE SET NULL 悄悄清空。
+		var owner int64
+		if err := db.QueryRow(`SELECT owner_id FROM applications WHERE id = 1`).Scan(&owner); err != nil {
+			t.Fatalf("读跟进人失败: %v", err)
+		}
+		if owner != 2 {
+			t.Fatalf("跟进人 = %d，期望 2", owner)
+		}
+	})
+
+	t.Run("不是种子成员就不动", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "custom.db")
+		db, err := Open(path)
+		if err != nil {
+			t.Fatalf("建库失败: %v", err)
+		}
+		defer db.Close()
+		// 一个真给成员起名叫 A 的库，但人数对不上种子，迁移应当放过它。
+		for _, n := range []string{"A", "张三"} {
+			if _, err := db.Exec(`INSERT INTO members (name, created_at) VALUES (?, '2026-01-01T00:00:00Z')`, n); err != nil {
+				t.Fatalf("写入成员失败: %v", err)
+			}
+		}
+		if err := Migrate(db); err != nil {
+			t.Fatalf("迁移失败: %v", err)
+		}
+		names := memberNames(t, db)
+		if len(names) != 2 || names[0] != "A" {
+			t.Fatalf("非种子库不该被改动，实际 %v", names)
+		}
+	})
+}
+
+// openWithSeedMembers 造一个带 A/B/C 的老库并跑迁移。
+// ownerOfApp 非 0 时，给 B（id=2）挂一条流程，用来验证「有引用就不删」。
+func openWithSeedMembers(t *testing.T, ownerOfApp int64) *sql.DB {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("打开旧库失败: %v", err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	for _, n := range []string{"A", "B", "C"} {
+		if _, err := db.Exec(`INSERT INTO members (name, created_at) VALUES (?, '2026-01-01T00:00:00Z')`, n); err != nil {
+			t.Fatalf("写入成员失败: %v", err)
+		}
+	}
+	if ownerOfApp > 0 {
+		if _, err := db.Exec(`INSERT INTO boards (id, key, name, created_at)
+			VALUES (1, 'JOBHUNT', '求职', '2026-01-01T00:00:00Z')`); err != nil {
+			t.Fatalf("写入看板失败: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO applications
+			(id, board_id, seq, company, stage_key, owner_id, position, created_at, updated_at)
+			VALUES (1, 1, 1, '某公司', 'hr_screen', ?, 1000, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+			ownerOfApp); err != nil {
+			t.Fatalf("写入流程失败: %v", err)
+		}
+	}
+	db.Close()
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+	return db
+}
+
+func memberNames(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT name FROM members ORDER BY id`)
+	if err != nil {
+		t.Fatalf("读成员失败: %v", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("扫描成员失败: %v", err)
+		}
+		out = append(out, n)
+	}
+	return out
+}

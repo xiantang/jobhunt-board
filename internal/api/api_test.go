@@ -383,8 +383,15 @@ func TestBoardFilter(t *testing.T) {
 func TestSwitchMemberSetsCookie(t *testing.T) {
 	r := setup(t)
 
+	// 种子里只有「我」一个人，先加一个才有得切。
+	code, body := do(t, r, http.MethodPost, "/api/members", map[string]any{"name": "同事"})
+	if code != http.StatusCreated {
+		t.Fatalf("新增成员返回 %d：%v", code, body)
+	}
+	id := strconv.Itoa(int(body["member"].(map[string]any)["id"].(float64)))
+
 	req := httptest.NewRequest(http.MethodPost, "/api/session/member",
-		bytes.NewReader([]byte(`{"member_id":2}`)))
+		bytes.NewReader([]byte(`{"member_id":`+id+`}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -393,11 +400,32 @@ func TestSwitchMemberSetsCookie(t *testing.T) {
 		t.Fatalf("切换用户返回 %d：%s", w.Code, w.Body.String())
 	}
 	for _, c := range w.Result().Cookies() {
-		if c.Name == ginx.CookieCurrentMember && c.Value == "2" {
+		if c.Name == ginx.CookieCurrentMember && c.Value == id {
 			return
 		}
 	}
 	t.Fatalf("没有写入 %s cookie", ginx.CookieCurrentMember)
+}
+
+// 种子只写一个成员：这是一个人自己用的看板，默认跟进人就是本人。
+func TestSeedHasSingleMember(t *testing.T) {
+	r := setup(t)
+
+	code, body := do(t, r, http.MethodGet, "/api/members", nil)
+	if code != http.StatusOK {
+		t.Fatalf("成员列表返回 %d：%v", code, body)
+	}
+	members := body["members"].([]any)
+	if len(members) != 1 {
+		t.Fatalf("种子成员应当只有一个，实际 %d 个：%v", len(members), members)
+	}
+	if got := members[0].(map[string]any)["name"]; got != "我" {
+		t.Fatalf("成员名 = %v，期望「我」", got)
+	}
+	// 「我是谁」默认落在这个人身上。
+	if got := body["current_member_id"]; got != members[0].(map[string]any)["id"] {
+		t.Fatalf("当前用户 = %v，期望 %v", got, members[0].(map[string]any)["id"])
+	}
 }
 
 func TestBoardPageRenders(t *testing.T) {
