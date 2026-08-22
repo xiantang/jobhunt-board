@@ -45,10 +45,23 @@ func TestCalendarScriptRenders(t *testing.T) {
 
 	html := runScript(t, node, "static/calendar.js", agenda, "agenda")
 
-	for _, want := range []string{"Bitdeer · 一面", "组内周会", "entry--google", "撞期"} {
+	for _, want := range []string{"Bitdeer · 一面", "组内周会", "ev--google", "week__now"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("渲染结果里缺少 %q：\n%s", want, html)
 		}
+	}
+
+	// 09:00 那场从第 9 小时起画：HOUR=44px，top 该是 396px。
+	// 这个数错了，整页事件就会和左边的小时刻度错位——网格视图里这是致命的。
+	if !strings.Contains(html, "top:396.0px") {
+		t.Fatalf("09:00 的面试该定位在 top:396.0px（9 × 44）：\n%s", html)
+	}
+	// 两场重叠 → 各占一半宽度，并排放。这是网格视图取代「撞期」角标的方式。
+	if got := strings.Count(html, "width:50.000%"); got != 2 {
+		t.Fatalf("重叠的两场该各占一半宽度，实际 %d 块：\n%s", got, html)
+	}
+	if !strings.Contains(html, "left:50.000%") {
+		t.Fatalf("重叠的第二场该挪到右半边：\n%s", html)
 	}
 }
 

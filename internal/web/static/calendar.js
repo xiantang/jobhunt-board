@@ -40,62 +40,170 @@
 
   // ---------- 渲染 ----------
 
-  function entryHTML(e) {
-    const google = e.source === 'google';
-    const time = e.all_day ? '全天' : `${hhmm(e.start)}–${hhmm(e.end)}`;
+  // 一小时在网格上占多高。整页的定位算术都从这一个常数推出来。
+  const HOUR = 44;
+  const MIN_BLOCK = 22; // 再短的会议也得留出能点中、能看清标题的高度
 
-    // 面试用阶段配色，Google 的会议统一灰调——一眼分得清哪些是自己排的。
-    const accent = google ? '' : ` style="--entry-color: ${esc(e.stage_color || '#0052cc')}"`;
-    const meta = [];
-    if (google) {
-      meta.push('<span class="entry__src">Google 日历</span>');
-    } else {
-      meta.push(`<span class="entry__key">${esc(e.application_key)}</span>`);
-      if (e.mode) meta.push(`<span>${esc(MODES[e.mode] || e.mode)}</span>`);
-      if (e.result && e.result !== 'pending') meta.push(`<span>${esc(RESULTS[e.result])}</span>`);
-      meta.push(e.synced
-        ? '<span class="entry__synced" title="已同步到 Google 日历">✓ 已同步</span>'
-        : `<button type="button" class="btn btn--tiny" data-sync="${e.round_id || ''}">同步到日历</button>`);
+  const minutesOf = (iso) => {
+    const d = new Date(iso);
+    return d.getHours() * 60 + d.getMinutes();
+  };
+
+  // 把一天里重叠的条目排成并排的几列。
+  // 先按开始时间排，再贪心地把每一条塞进第一个「已经空出来」的列；
+  // 一簇互相重叠的条目共享同一个列数，宽度按列数均分——
+  // 这正是 Google 日历里两场撞在一起时各占一半的效果。
+  function layout(entries) {
+    const evs = entries.map((e) => {
+      const start = minutesOf(e.start);
+      const end = Math.max(minutesOf(e.end), start + 20);
+      return { e, start, end, col: 0, cols: 1 };
+    });
+    evs.sort((a, b) => a.start - b.start || a.end - b.end);
+
+    let cluster = [];
+    let clusterEnd = -1;
+    const flush = () => {
+      const cols = cluster.reduce((n, it) => Math.max(n, it.col + 1), 0);
+      cluster.forEach((it) => { it.cols = cols; });
+      cluster = [];
+    };
+
+    const colEnds = [];
+    for (const it of evs) {
+      if (it.start >= clusterEnd) { // 和前一簇完全断开了，结算上一簇
+        flush();
+        colEnds.length = 0;
+      }
+      let col = colEnds.findIndex((end) => end <= it.start);
+      if (col === -1) col = colEnds.length;
+      colEnds[col] = it.end;
+      it.col = col;
+      cluster.push(it);
+      clusterEnd = Math.max(clusterEnd, it.end);
     }
-    if (e.location) meta.push(`<span class="entry__where">${esc(e.location)}</span>`);
+    flush();
+    return evs;
+  }
 
-    const link = e.url
-      ? `<a class="entry__link" href="${esc(e.url)}" target="_blank" rel="noopener">打开</a>` : '';
+  // 网格里的一块。位置由 top/height 定，宽度由并排列数定。
+  function blockHTML(it) {
+    const e = it.e;
+    const google = e.source === 'google';
+    const top = (it.start / 60) * HOUR;
+    const height = Math.max(((it.end - it.start) / 60) * HOUR, MIN_BLOCK);
+    const width = 100 / it.cols;
+    const time = `${hhmm(e.start)}–${hhmm(e.end)}`;
 
-    return `<article class="entry entry--${google ? 'google' : 'interview'}${e.conflict ? ' entry--conflict' : ''}"${accent}
-             ${google ? '' : `data-app="${e.application_id}"`}>
-      <time class="entry__time">${esc(time)}</time>
-      <div class="entry__body">
-        <h4 class="entry__title">${esc(e.title)}</h4>
-        <div class="entry__meta">${meta.join('')}${link}</div>
-      </div>
-      ${e.conflict ? '<span class="entry__warn" title="和同一天的另一场时间重叠">撞期</span>' : ''}
+    // 悬停能看到全部信息——块里塞不下的都放进 title。
+    const tip = [time, e.title];
+    if (e.application_key) tip.push(e.application_key);
+    if (e.mode) tip.push(MODES[e.mode] || e.mode);
+    if (e.result && e.result !== 'pending') tip.push(RESULTS[e.result]);
+    if (e.location) tip.push(e.location);
+    if (!google) tip.push(e.synced ? '✓ 已同步到 Google 日历' : '未同步');
+
+    const style = `top:${top.toFixed(1)}px; height:${height.toFixed(1)}px;`
+      + ` left:${(it.col * width).toFixed(3)}%; width:${width.toFixed(3)}%;`
+      + (google ? '' : ` --entry-color:${esc(e.stage_color || '#0052cc')};`);
+
+    const sync = !google && !e.synced && e.round_id
+      ? `<button type="button" class="ev__sync" data-sync="${e.round_id}" title="同步到 Google 日历">↑</button>` : '';
+
+    const short = height < 34 ? ' ev--short' : '';
+
+    return `<article class="ev ev--${google ? 'google' : 'interview'}${short}"
+             style="${style}" title="${esc(tip.join(' · '))}"
+             ${google ? (e.url ? `data-url="${esc(e.url)}"` : '') : `data-app="${e.application_id}"`}>
+      <span class="ev__title">${esc(e.title)}</span>
+      <span class="ev__time">${esc(time)}</span>
+      ${sync}
     </article>`;
   }
 
-  function dayHTML(day) {
-    const body = day.entries.length
-      ? day.entries.map(entryHTML).join('')
-      : '<p class="agenda-empty">空</p>';
-    const [, m, d] = day.date.split('-');
-    return `<section class="agenda-day${day.today ? ' agenda-day--today' : ''}">
-      <header class="agenda-day__head">
-        <b>${m}-${d}</b><span>${esc(day.weekday)}</span>
-        ${day.today ? '<em>今天</em>' : ''}
-      </header>
-      <div class="agenda-day__body">${body}</div>
-    </section>`;
+  function allDayHTML(entries) {
+    return entries.map((e) => {
+      const google = e.source === 'google';
+      const style = google ? '' : ` style="--entry-color:${esc(e.stage_color || '#0052cc')}"`;
+      return `<article class="ev ev--allday ev--${google ? 'google' : 'interview'}"${style}
+               title="${esc(e.title)}"
+               ${google ? (e.url ? `data-url="${esc(e.url)}"` : '') : `data-app="${e.application_id}"`}>
+        <span class="ev__title">${esc(e.title)}</span>
+      </article>`;
+    }).join('');
+  }
+
+  // 当前时刻那条红线。只画在「今天」那一列上。
+  function nowLineHTML(day) {
+    if (!day.today) return '';
+    const d = new Date();
+    const top = ((d.getHours() * 60 + d.getMinutes()) / 60) * HOUR;
+    return `<div class="week__now" style="top:${top.toFixed(1)}px"></div>`;
   }
 
   function render(agenda) {
-    agendaEl.innerHTML = agenda.days.map(dayHTML).join('');
+    const days = agenda.days || [];
+    const hours = Array.from({ length: 24 }, (_, h) =>
+      `<div class="week__hour" style="height:${HOUR}px"><span>${pad(h)}:00</span></div>`).join('');
 
-    const last = agenda.days[agenda.days.length - 1];
-    rangeEl.textContent = agenda.days.length
-      ? `${agenda.days[0].date} ~ ${last.date}` : '';
+    const head = days.map((day) => {
+      const [, m, d] = day.date.split('-');
+      return `<div class="week__dayhead${day.today ? ' is-today' : ''}">
+        <span class="week__weekday">${esc(day.weekday)}</span>
+        <b class="week__date">${Number(d)}</b>
+        <span class="week__month">${Number(m)}月</span>
+      </div>`;
+    }).join('');
+
+    const anyAllDay = days.some((day) => day.entries.some((e) => e.all_day));
+    const allday = anyAllDay
+      ? `<div class="week__allday">
+          <div class="week__gutter-label">全天</div>
+          ${days.map((day) =>
+            `<div class="week__allday-col">${allDayHTML(day.entries.filter((e) => e.all_day))}</div>`).join('')}
+        </div>`
+      : '';
+
+    const cols = days.map((day) => {
+      const timed = layout(day.entries.filter((e) => !e.all_day));
+      return `<div class="week__col${day.today ? ' is-today' : ''}" style="height:${24 * HOUR}px">
+        ${nowLineHTML(day)}${timed.map(blockHTML).join('')}
+      </div>`;
+    }).join('');
+
+    agendaEl.innerHTML = `<div class="week">
+      <div class="week__head">
+        <div class="week__gutter-label">GMT+8</div>
+        ${head}
+      </div>
+      ${allday}
+      <div class="week__body" id="week-body">
+        <div class="week__hours">${hours}</div>
+        ${cols}
+      </div>
+    </div>`;
+
+    scrollToFirst(days);
+
+    const last = days[days.length - 1];
+    rangeEl.textContent = days.length ? `${days[0].date} ~ ${last.date}` : '';
 
     renderStatus(agenda.status, agenda.warning);
     renderPending(agenda.unscheduled || []);
+  }
+
+  // 一进来就停在最早那场的前一小时。整天都是空的就停在 8 点——
+  // 从 0 点开始看，屏幕上一半是夜里，什么也没有。
+  function scrollToFirst(days) {
+    const body = document.getElementById('week-body');
+    if (!body) return;
+    let earliest = 8 * 60;
+    for (const day of days) {
+      for (const e of day.entries) {
+        if (!e.all_day) earliest = Math.min(earliest, minutesOf(e.start));
+      }
+    }
+    body.scrollTop = Math.max(0, ((earliest - 60) / 60) * HOUR);
   }
 
   function renderStatus(status, warning) {
@@ -123,7 +231,7 @@
                 style="--entry-color: ${esc(e.stage_color || '#0052cc')}">
         <time class="entry__time">待安排</time>
         <div class="entry__body">
-          <h4 class="entry__title">${esc(e.title)}</h4>
+          <h4 class="entry__title" title="${esc(e.title)}">${esc(e.title)}</h4>
           <div class="entry__meta"><span class="entry__key">${esc(e.application_key)}</span></div>
         </div>
       </article>`).join('');
@@ -154,13 +262,13 @@
     reload();
   });
 
-  // 点面试条目回看板，Google 的条目走它自己的链接，不拦。
+  // 点面试块回看板对应的那张卡，点 Google 的块跳去 Google 日历。
   document.body.addEventListener('click', async (e) => {
     const sync = e.target.closest('[data-sync]');
     if (sync) {
       e.stopPropagation();
       sync.disabled = true;
-      sync.textContent = '同步中…';
+      sync.textContent = '…';
       try {
         await API.post(`/api/rounds/${sync.dataset.sync}/sync`, {});
         API.toast('已同步到 Google 日历', true);
@@ -168,7 +276,7 @@
       } catch (err) {
         API.toast(err.message);
         sync.disabled = false;
-        sync.textContent = '同步到日历';
+        sync.textContent = '↑';
       }
       return;
     }
@@ -186,11 +294,13 @@
       return;
     }
 
-    if (e.target.closest('.entry__link')) return;
-    const entry = e.target.closest('.entry--interview');
-    if (entry && entry.dataset.app) {
-      location.href = `/boards/${boardKey}?open=${entry.dataset.app}`;
+    const block = e.target.closest('[data-app], [data-url]');
+    if (!block) return;
+    if (block.dataset.url) { // Google 的会议直接跳到它在日历上的那条
+      window.open(block.dataset.url, '_blank', 'noopener');
+      return;
     }
+    location.href = `/boards/${boardKey}?open=${block.dataset.app}`;
   });
 
   // OAuth 回调跳回来时给一句结果提示。
