@@ -31,14 +31,38 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # 线上跑的是 MySQL,所以这里得有一个真的 MySQL 让测试连。
+    # 只测 SQLite 的话，方言差异（保留字、排序规则名、upsert 语法）
+    # 要等发布之后才会以 500 的形式暴露出来。
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: jobhunt
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - name: Vet & test
+      - name: Vet & test (SQLite)
         run: go vet ./... && go test ./...
+      # 同一套测试再跑一遍，这次连 MySQL。每个用例在实例上开一个
+      # 随机名字的空库，跑完删掉（internal/platform/db/dbtest）。
+      - name: Test (MySQL)
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/jobhunt
+        run: go test -count=1 ./...
 
   build-push:
     # 测试不过就不发布。这是这条流水线里唯一的质量闸口，

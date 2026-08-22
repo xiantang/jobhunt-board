@@ -11,18 +11,13 @@ RUN go mod download
 
 COPY . .
 
-# CGO_ENABLED=0 —— 数据库驱动是 modernc.org/sqlite,纯 Go 实现，不需要 cgo。
-#   这正是当初选它而不是 mattn/go-sqlite3 的价值兑现的地方：能出静态二进制，
-#   于是运行镜像可以是 distroless（没有 libc、没有 shell）。
+# CGO_ENABLED=0 —— 两个数据库驱动都是纯 Go 的：本地用的 modernc.org/sqlite,
+#   线上用的 go-sql-driver/mysql,都不需要 cgo。于是能出静态二进制，
+#   运行镜像可以是 distroless（没有 libc、没有 shell）。
 # -trimpath 去掉构建机的绝对路径，-s -w 去掉符号表和调试信息。
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -ldflags='-s -w' \
       -o /out/server ./cmd/server
-
-# 数据目录在这里建好并交给 nonroot(65532)。
-# 正常情况下 /data 会被 PVC 盖掉，这一步是为了「不挂卷也能跑」——
-# 本地 docker run 验证镜像时不用额外准备什么。
-RUN mkdir -p /out/data && chown -R 65532:65532 /out/data
 
 
 # static-debian12 里没有 shell、没有包管理器、没有 libc,只有 ca-certificates
@@ -31,7 +26,6 @@ RUN mkdir -p /out/data && chown -R 65532:65532 /out/data
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/server /server
-COPY --from=build --chown=nonroot:nonroot /out/data /data
 
 # 时区：代码里大量使用 time.Local（日程按本地时间排布）。
 # distroless 不带 /usr/share/zoneinfo,所以 main.go 里 import 了 time/tzdata
@@ -39,12 +33,13 @@ COPY --from=build --chown=nonroot:nonroot /out/data /data
 ENV TZ=Asia/Shanghai
 
 # nonroot 用户，UID 65532。不是 root 意味着即使容器被攻破，也拿不到
-# 挂载卷之外的任何写权限。
+# 容器里任何位置的写权限（根文件系统在 k8s 里还是只读挂载）。
 USER nonroot:nonroot
 
 EXPOSE 8080
 
-# 数据库落在 /data —— 由 PVC 提供持久化，Pod 重建后数据还在。
-# 不写 /app/data 这类路径是为了让挂载点显眼：凡是 /data 之外的都是易失的。
+# 数据在外部 MySQL 上：容器读环境变量 MYSQL_DSN 去连（见 cmd/server/main.go）。
+# 镜像里没有任何持久化位置 —— 没配 DSN 就会退回 SQLite,而这里的文件系统
+# 是只读的，起不来。这是想要的结果：线上不该出现「数据写进了容器」这种事。
 ENTRYPOINT ["/server"]
-CMD ["-addr", ":8080", "-db", "/data/app.db"]
+CMD ["-addr", ":8080"]

@@ -1,10 +1,7 @@
 # 这是唯一「给使用者改」的文件，templates/ 里的是实现细节。
 
-# ⚠️ 固定为 1,不要调大。
-#
-# 数据库是单文件 SQLite,放在一块 ReadWriteOnce 的 PVC 上。多个副本
-# 同时写同一个文件 = 数据损坏;而 RWO 卷本身也不允许被两个节点挂载。
-# 想要多副本，前提是先换掉存储层(Postgres),不是改这个数字。
+# 数据在外部 MySQL 上，Pod 本身没有状态，调大是安全的。
+# 保持 1 只是因为这是一个人用的看板，一个 Pod 绰绰有余。
 replicaCount: 1
 
 image:
@@ -64,19 +61,21 @@ basicAuth:
 # 表现成 Pod 起不来。
 secretName: jobhunt-secrets
 
-# 数据卷：SQLite 文件落在这。Pod 重建、节点重启之后数据都还在。
-persistence:
-  enabled: true
-  # 留空用集群默认 StorageClass。k3s 默认是 local-path。
-  #
-  # ⚠️ local-path 的含义：数据实际存在【那台节点】的本地磁盘上
-  #    (/var/lib/rancher/k3s/storage/...)。单节点集群这没问题，
-  #    但它不是备份 —— EC2 的根卷 delete_on_termination = true,
-  #    机器一旦 terminate,这块数据跟着消失。备份见 k8s/README.md。
-  storageClass: ""
-  size: 1Gi
-  accessMode: ReadWriteOnce
-  mountPath: /data
+# ── 数据库 ──────────────────────────────────────────────────────────
+#
+# 线上跑 MySQL,连接串从下面这个 Secret 的 dsn 键注入成 MYSQL_DSN。
+# 本地开发不配这个环境变量，应用会退回 SQLite 文件（见 cmd/server/main.go）。
+#
+# 这个 Secret【不在 git 里】,要手动建，见 k8s/README.md：
+#   kubectl create secret generic jobhunt-mysql \
+#     --from-literal=dsn='user:pass@tcp(mysql.internal:3306)/jobhunt'
+#
+# 它【不是】optional 的：Secret 不存在时 Pod 起不来。这是故意的 ——
+# 要是让它可选，缺 DSN 的 Pod 会安静地退回 SQLite,把数据写进容器的临时
+# 文件系统，重启就没，而且一切看起来都正常。宁可起不来。
+mysql:
+  secretName: jobhunt-mysql
+  secretKey: dsn
 
 resources:
   requests:

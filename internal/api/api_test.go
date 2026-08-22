@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,8 +15,9 @@ import (
 
 	"interview/internal/ai"
 	"interview/internal/gcal"
+	"interview/internal/platform/db"
+	"interview/internal/platform/db/dbtest"
 	"interview/internal/platform/ginx"
-	"interview/internal/platform/sqlitedb"
 	"interview/internal/server"
 )
 
@@ -35,16 +35,12 @@ func setupWith(t *testing.T, model ai.Completer, google *gcal.Client) *gin.Engin
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	db, err := sqlitedb.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("打开测试库失败: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	conn := dbtest.New(t)
 
-	if err := sqlitedb.Seed(db); err != nil {
+	if err := db.Seed(conn); err != nil {
 		t.Fatalf("写入种子数据失败: %v", err)
 	}
-	return server.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), model, google)
+	return server.New(conn, slog.New(slog.NewTextHandler(io.Discard, nil)), model, google)
 }
 
 // do 发一个请求并返回状态码与解析后的 JSON。

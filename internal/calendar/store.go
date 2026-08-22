@@ -53,20 +53,30 @@ func (s *store) load(ctx context.Context) (record, error) {
 }
 
 // save 写入或覆盖凭证。
+//
+// 不用 upsert：SQLite 写 ON CONFLICT，MySQL 写 ON DUPLICATE KEY UPDATE，
+// 两边语法对不上。这张表永远只有 id = 1 一行，先更新、没更新到再插入，
+// 是两边都认的写法。单用户，不存在两个请求同时来抢这一行。
 func (s *store) save(ctx context.Context, r record) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO google_accounts (id, email, calendar_id, access_token, refresh_token, expiry, connected_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET
-			email         = excluded.email,
-			calendar_id   = excluded.calendar_id,
-			access_token  = excluded.access_token,
-			refresh_token = excluded.refresh_token,
-			expiry        = excluded.expiry`,
-		r.Email, r.CalendarID, r.token.AccessToken, r.token.RefreshToken,
-		r.token.Expiry.UTC().Format(time.RFC3339),
-		r.ConnectedAt.UTC().Format(time.RFC3339))
+	expiry := r.token.Expiry.UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE google_accounts
+		SET email = ?, calendar_id = ?, access_token = ?, refresh_token = ?, expiry = ?
+		WHERE id = 1`,
+		r.Email, r.CalendarID, r.token.AccessToken, r.token.RefreshToken, expiry)
 	if err != nil {
+		return apperr.Internal(err)
+	}
+	// connected_at 只在第一次连接时写：更新分支不碰它，保留最早那次的时间。
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		return nil
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO google_accounts (id, email, calendar_id, access_token, refresh_token, expiry, connected_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?)`,
+		r.Email, r.CalendarID, r.token.AccessToken, r.token.RefreshToken, expiry,
+		r.ConnectedAt.UTC().Format(time.RFC3339)); err != nil {
 		return apperr.Internal(err)
 	}
 	return nil

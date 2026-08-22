@@ -4,14 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"interview/internal/board"
 	"interview/internal/member"
 	"interview/internal/platform/apperr"
-	"interview/internal/platform/sqlitedb"
+	"interview/internal/platform/db/dbtest"
 	"interview/internal/stage"
 	"interview/internal/workflow"
 )
@@ -20,22 +19,18 @@ import (
 func setup(t *testing.T) (*Service, int64, []int64) {
 	t.Helper()
 
-	db, err := sqlitedb.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("打开测试库失败: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	conn := dbtest.New(t)
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := db.Exec(`INSERT INTO boards (key, name, description, created_at) VALUES ('T', '测试看板', '', ?)`, now)
+	res, err := conn.Exec(`INSERT INTO boards ("key", name, description, created_at) VALUES ('T', '测试看板', '', ?)`, now)
 	if err != nil {
 		t.Fatalf("写入测试看板失败: %v", err)
 	}
 	boardID, _ := res.LastInsertId()
 
-	seedStages(t, db, boardID)
+	seedStages(t, conn, boardID)
 
-	members := member.NewService(db)
+	members := member.NewService(conn)
 	ids := make([]int64, 0, 2)
 	for _, name := range []string{"甲", "乙"} {
 		m, err := members.Create(context.Background(), name, "member")
@@ -45,8 +40,8 @@ func setup(t *testing.T) (*Service, int64, []int64) {
 		ids = append(ids, m.ID)
 	}
 
-	stages := stage.NewService(db)
-	return NewService(db, members, board.NewService(db), stages), boardID, ids
+	stages := stage.NewService(conn)
+	return NewService(conn, members, board.NewService(conn), stages), boardID, ids
 }
 
 // seedStages 直接写表，位置显式给定，测试不依赖 stage.Create 的默认插入策略。
@@ -65,7 +60,7 @@ func seedStages(t *testing.T, db *sql.DB, boardID int64) {
 	}
 	for i, r := range rows {
 		if _, err := db.Exec(`
-			INSERT INTO stages (board_id, key, label, kind, color, requires_owner, position, created_at)
+			INSERT INTO stages (board_id, "key", label, kind, color, requires_owner, position, created_at)
 			VALUES (?, ?, ?, ?, '#888888', ?, ?, ?)`,
 			boardID, r.key, r.label, r.kind, r.requiresOwner, float64((i+1)*1000), now); err != nil {
 			t.Fatalf("写入阶段失败: %v", err)
