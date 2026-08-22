@@ -44,37 +44,84 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate 执行幂等的建表语句，再补上建表之后新增的列。
+// Migrate 执行幂等的建表语句，补上建表之后新增的列，再跑一次性的数据修补。
 func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("初始化表结构失败: %w", err)
 	}
 	// CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，旧库要单独补。
-	if err := addColumn(db, "stages", "skippable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if _, err := addColumn(db, "stages", "skippable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
+	}
+	return once(db, "skippable_defaults", backfillSkippable)
+}
+
+// once 保证一段数据修补在同一个库上只跑一次，跑过的记在 migrations 表里。
+//
+// 「列在不在」不足以判断修补做没做——列可能是上个版本加的，
+// 那时还没有这段回填逻辑。用一张表显式记录，才不会漏掉中间状态的库。
+func once(db *sql.DB, id string, fn func(*sql.DB) error) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS migrations (
+		id         TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("初始化 migrations 表失败: %w", err)
+	}
+
+	var applied int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM migrations WHERE id = ?`, id).Scan(&applied); err != nil {
+		return fmt.Errorf("检查迁移 %s 是否已执行失败: %w", id, err)
+	}
+	if applied > 0 {
+		return nil
+	}
+	if err := fn(db); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT INTO migrations (id, applied_at) VALUES (?, ?)`,
+		id, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("记录迁移 %s 失败: %w", id, err)
 	}
 	return nil
 }
 
-// addColumn 幂等地给表加一列：列已存在就跳过。
-func addColumn(db *sql.DB, table, column, decl string) error {
+// backfillSkippable 给已有的库补上「可跳过」的默认值。
+//
+// ALTER TABLE 只能给一个统一的 DEFAULT 0，结果是旧库里每一列都成了「不可跳过」，
+// 和新建库不一致——「在线测评」不可跳过，HR screen 就没法直达一面。
+// 这里按 key 把默认配置里该开的开上。它只跑一次，
+// 之后用户在页面上取消勾选，重启也不会被重新打开。
+func backfillSkippable(db *sql.DB) error {
+	for _, s := range defaultStages {
+		if !s.skippable {
+			continue
+		}
+		if _, err := db.Exec(`UPDATE stages SET skippable = 1 WHERE key = ?`, s.key); err != nil {
+			return fmt.Errorf("回填 %s 的 skippable 失败: %w", s.key, err)
+		}
+	}
+	return nil
+}
+
+// addColumn 幂等地给表加一列，返回这次是否真的加了。列已存在就跳过。
+func addColumn(db *sql.DB, table, column, decl string) (bool, error) {
 	rows, err := db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
 	if err != nil {
-		return fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
+		return false, fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
 	}
 	exists := rows.Next()
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
+		return false, fmt.Errorf("检查 %s.%s 是否存在失败: %w", table, column, err)
 	}
 	rows.Close()
 	if exists {
-		return nil
+		return false, nil
 	}
 	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
-		return fmt.Errorf("给 %s 添加 %s 列失败: %w", table, column, err)
+		return false, fmt.Errorf("给 %s 添加 %s 列失败: %w", table, column, err)
 	}
-	return nil
+	return true, nil
 }
 
 // defaultStages 是新看板的默认面试流程。用户可以在页面上随意增删改序，
