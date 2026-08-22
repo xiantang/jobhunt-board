@@ -2,3 +2,12 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# 本地密钥：Google OAuth / OpenAI，不进版本库
+.env
+
+# 对话记录：可能含密钥和个人信息，留在本地
+chat-history/
+
+# air 热重载的编译产物
+tmp/

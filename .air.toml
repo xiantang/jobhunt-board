@@ -1,0 +1,24 @@
+# air 热重载配置：改 Go / 模板 / 静态文件都会自动重新编译重启。
+# 用法：./run.sh --watch 或直接 air —— 两条路都经 run.sh 加载 .env。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/server ./cmd/server"
+  # 走 run.sh 起，密钥才会从 .env 加载；-mode=debug 是开发态的 gin 日志。
+  entrypoint = ["./run.sh", "--exec", "./tmp/server", "-mode=debug"]
+  # 模板和静态文件是 embed 进来的，改完必须重新编译，所以一起监听。
+  include_ext = ["go", "html", "css", "js", "sql"]
+  exclude_dir = ["tmp", "data", "chat-history", "testdata", ".git"]
+  exclude_regex = ["_test\\.go", "testdata"]
+  # 编译器报错时不要用上一版二进制假装没事。
+  stop_on_error = true
+  # 编辑器保存常触发多次事件，攒一下再编译。
+  delay = 300
+  log = "build-errors.log"
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = true
