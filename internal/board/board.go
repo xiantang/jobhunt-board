@@ -45,7 +45,7 @@ func NewService(db *sql.DB) *Service { return &Service{db: db} }
 func (s *Service) GetByKey(ctx context.Context, key string) (Board, error) {
 	var b Board
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, key, name, description FROM boards WHERE key = ?`, key).
+		`SELECT id, "key", name, description FROM boards WHERE "key" = ?`, key).
 		Scan(&b.ID, &b.Key, &b.Name, &b.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Board{}, apperr.NotFound("看板不存在：" + key)
@@ -60,7 +60,7 @@ func (s *Service) GetByKey(ctx context.Context, key string) (Board, error) {
 func (s *Service) GetByID(ctx context.Context, id int64) (Board, error) {
 	var b Board
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, key, name, description FROM boards WHERE id = ?`, id).
+		`SELECT id, "key", name, description FROM boards WHERE id = ?`, id).
 		Scan(&b.ID, &b.Key, &b.Name, &b.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Board{}, apperr.NotFound("看板不存在")
@@ -90,7 +90,7 @@ func (s *Service) SummaryOf(ctx context.Context, boardID int64) (Summary, error)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT st.kind, COUNT(*)
 		FROM applications a
-		JOIN stages st ON st.board_id = a.board_id AND st.key = a.stage_key
+		JOIN stages st ON st.board_id = a.board_id AND st."key" = a.stage_key
 		WHERE a.board_id = ?
 		GROUP BY st.kind`, boardID)
 	if err != nil {

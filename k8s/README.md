@@ -14,9 +14,9 @@ GitHub Actions（.github/workflows/deploy.yml）
    ↓
 ArgoCD 轮询到这个 commit
    ↓
-k3s 滚动更新（Recreate）
+k3s 滚动更新（RollingUpdate）
    ↓
-Traefik ──BasicAuth──> Service ──> Pod ──> PVC(/data/app.db)
+Traefik ──BasicAuth──> Service ──> Pod ──> MySQL StatefulSet（PVC）
    └─ 证书由 cert-manager 走 Cloudflare DNS-01 自动签发续期
 ```
 
@@ -54,7 +54,52 @@ shred -u /tmp/auth      # 别把明文留在磁盘上
 > ⚠️ key 必须叫 `users`，Traefik 的 basicAuth 中间件只认这个名字。
 > 叫别的不会报错，只会**静默地放行所有请求**。
 
-### 3. 应用密钥
+### 3. MySQL（跑在集群里）
+
+数据库由 chart 一起部署：一个单副本 StatefulSet + 一块 PVC + 一个只对集群内
+开放的 ClusterIP Service（`values.yaml` 里的 `mysql.internal`）。不开 NodePort
+也不进 Ingress —— 数据库不该有公网入口，要从本机连就 `port-forward`。
+
+要手动建的是两个 Secret，**都不在 git 里**，而且刻意分开：
+
+```bash
+# ① 给 MySQL 自己：root 口令 + 应用账号
+k -n jobhunt create secret generic jobhunt-mysql-auth \
+  --from-literal=root-password="$(openssl rand -base64 24)" \
+  --from-literal=username=jobhunt \
+  --from-literal=password="$(openssl rand -base64 24)"
+
+# ② 给应用：一整条 DSN。密码要和 ① 里的 password 一致
+k -n jobhunt create secret generic jobhunt-mysql \
+  --from-literal=dsn='jobhunt:<和①一样的密码>@tcp(jobhunt-mysql:3306)/jobhunt'
+```
+
+> 用 `openssl rand` 生成的话，先把 ① 建好再把密码读出来拼进 ②：
+> `k -n jobhunt get secret jobhunt-mysql-auth -o jsonpath='{.data.password}' | base64 -d`
+
+分成两个是因为泄露面不同：应用只该知道自己那条 DSN,拿不到 root。
+
+DSN 是 `go-sql-driver/mysql` 的格式，写到库名就行——字符集、时区、超时那些参数
+由代码统一钉死（`internal/platform/db/mysql.go`），不用也不该在这里配。
+库和表也不用手动建：`MYSQL_DATABASE` 让镜像建库，服务启动时跑幂等的建表语句。
+
+> ⚠️ `jobhunt-mysql` 这个 Secret 和下面应用密钥那个不一样，**不是 `optional`**：
+> 它不存在时 Pod 会停在 `CreateContainerConfigError`。这是故意的——要是让它可选，
+> 缺 DSN 的 Pod 会安静地退回 SQLite,把数据写进容器里，重启就没，而页面上一切正常。
+> 宁可起不来。
+
+启动顺序不用管：应用先起来时连不上库会直接退出，kubelet 重启它，
+MySQL 就绪后自然连上（这个过程里会看到几次 `CrashLoopBackOff`,正常）。
+第一次初始化数据目录要几十秒。
+
+要手动连上去看：
+
+```bash
+k -n jobhunt port-forward svc/jobhunt-mysql 3306:3306
+mysql -h 127.0.0.1 -u root -p
+```
+
+### 4. 应用密钥
 
 ```bash
 k -n jobhunt create secret generic jobhunt-secrets \
@@ -64,20 +109,42 @@ k -n jobhunt create secret generic jobhunt-secrets \
   --from-literal=GOOGLE_REDIRECT_URL='https://jobhunt.vim0.com/oauth/google/callback'
 ```
 
-Deployment 里是 `optional: true`，所以这个 Secret 不存在服务也能起来，只是
-「✨ AI 录入」和 Google 日历同步两个入口不显示。
+本地 `.env` 里已经有这几个值的话，可以直接由它生成，省得手抄。
+注意 `.env` 里的 `GOOGLE_REDIRECT_URL` 指向 `http://localhost:8080/...`,
+灌进集群会让线上 OAuth 回调到本机，所以要把那一行换掉：
+
+```bash
+k -n jobhunt create secret generic jobhunt-secrets \
+  --from-env-file=<(grep -v '^GOOGLE_REDIRECT_URL=' .env; \
+                    echo "GOOGLE_REDIRECT_URL=https://jobhunt.vim0.com/oauth/google/callback") \
+  --dry-run=client -o yaml | k apply -f -
+```
+
+覆盖动作放在 `.env` 那一侧，是因为 **`--from-env-file` 不能和 `--from-literal`
+同时用**（`kubectl` 直接报 `from-env-file cannot be combined with
+from-file or from-literal`）。`<(...)` 是 bash 的进程替换，`sh` 下不可用。
+
+已经建过、只想改其中一个键，用 patch,不必整个重建：
+
+```bash
+k -n jobhunt patch secret jobhunt-secrets \
+  -p '{"stringData":{"GOOGLE_REDIRECT_URL":"https://jobhunt.vim0.com/oauth/google/callback"}}'
+```
+
+> `.env` 里目前没有 `OPENAI_API_KEY` —— 线上想要「✨ AI 录入」得单独补一条
+> `--from-literal=OPENAI_API_KEY='sk-...'`,或者先加进 `.env` 再生成。
 
 > ⚠️ 上线后必须去 [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 > 把 `https://jobhunt.vim0.com/oauth/google/callback` 加进「Authorized redirect
 > URIs」，**和这里的值一字不差**。本地那个 `http://localhost:8080/...` 可以并存，
 > 两个都留着就能本地和线上都用。
 
-### 4. 让 ArgoCD 发现这个应用
+### 5. 让 ArgoCD 发现这个应用
 
 Application 清单在**博客仓库**里（`k8s/argocd/jobhunt-application.yaml`），
 因为 root-application 只监管那个目录。推上去 ArgoCD 就会自己创建。
 
-### 5. 先跑一次 CI
+### 6. 先跑一次 CI
 
 `Chart.yaml` 里的 `appVersion` 初始是占位值 `sha-REPLACE_ME_FIRST_CI_RUN`。
 直接同步的话 Pod 会卡在 `ImagePullBackOff`。所以顺序是：**先 push 一次触发 CI**，
@@ -99,30 +166,45 @@ curl -s -o /dev/null -w '%{http_code}\n' -u '<用户名>:<密码>' https://jobhu
 
 ## 数据在哪，怎么备份
 
-SQLite 文件在 PVC 上，实际落在**那台节点的本地磁盘**
-（`/var/lib/rancher/k3s/storage/...`，local-path 供应器）。
+数据在集群里那个 MySQL 的 PVC 上（`data-jobhunt-mysql-0`）。它由
+StatefulSet 的 `volumeClaimTemplates` 生成，**删掉 StatefulSet 也不会跟着删**,
+要手动 `delete pvc` 才会没。
 
-⚠️ **这不是备份。** EC2 根卷是 `delete_on_termination = true`，机器一旦
-terminate，这块数据跟着消失。PVC 上加了 `Prune=false` 和
-`helm.sh/resource-policy: keep`，能挡住「ArgoCD 顺手删掉」，但挡不住机器没了。
+⚠️ 但 k3s 默认的 local-path 意味着这块盘就是**那台 EC2 节点的本地磁盘**
+（`/var/lib/rancher/k3s/storage/...`）。根卷是 `delete_on_termination = true`,
+机器一 terminate，数据跟着消失。**PVC 不是备份。**
 
-导出一份：
+导一份出来：
 
 ```bash
-POD=$(k -n jobhunt get pod -l app.kubernetes.io/name=jobhunt -o name | head -1)
-k -n jobhunt exec "$POD" -- cat /data/app.db > app-$(date +%F).db
+POD=jobhunt-mysql-0
+k -n jobhunt exec "$POD" -- sh -c \
+  'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" --single-transaction \
+   --default-character-set=utf8mb4 jobhunt' > jobhunt-$(date +%F).sql
 ```
 
-> 镜像是 distroless，容器里**没有 shell 也没有 sqlite3**，所以只能这样整个文件
-> 拷出来，不能在容器里跑 `.backup`。服务在跑时直接 cat 理论上可能读到不一致的
-> 快照（WAL 还没 checkpoint）；要严谨的话先把副本数缩到 0 再从节点上拷。
+`--single-transaction` 走一致性快照，不用停服务；口令从容器自己的环境变量取，
+不会出现在你的 shell history 里。
+
+灌回去：
+
+```bash
+k -n jobhunt exec -i jobhunt-mysql-0 -- sh -c \
+  'mysql -u root -p"$MYSQL_ROOT_PASSWORD" jobhunt' < jobhunt-2026-08-22.sql
+```
+
+> 本地开发仍然是 SQLite（不配 `MYSQL_DSN` 就走 `data/app.db`），
+> 两边跑的是同一套 SQL——`TEST_MYSQL_DSN=... go test ./...` 会把整个测试套件
+> 在 MySQL 上再跑一遍，见根目录 README。
 
 ## 排障
 
 | 症状 | 多半是 |
 |---|---|
 | Pod `ImagePullBackOff` | appVersion 还是占位值，或 CI 没跑成功 |
-| Pod `CrashLoopBackOff`，日志报 `disk I/O error` | PVC 权限不对，检查 `fsGroup: 65532` |
+| Pod 停在 `CreateContainerConfigError` | `jobhunt-mysql` 这个 Secret 没建，或者 key 不叫 `dsn` |
+| 应用 `CrashLoopBackOff`,日志报 `连接数据库失败` | MySQL 还没就绪（等一会自己会好）；一直不好就查 DSN 里的口令和 `jobhunt-mysql-auth` 对不对得上 |
+| `jobhunt-mysql-0` 起不来，日志报 `Can't create/write to file` | 数据目录属主不对，检查 `runAsUser/fsGroup: 999` |
 | 页面能开但没有 401 | 中间件没挂上，见上面「必须验证的两件事」 |
 | 证书一直 pending | `k -n jobhunt describe certificate`，多半是 Cloudflare token 或 DNS-01 记录的问题 |
 | 日程时间整体偏 8 小时 | 镜像少了 `time/tzdata`（main.go 里那个匿名 import） |

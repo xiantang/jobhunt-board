@@ -485,3 +485,25 @@ func TestAgendaHidesUnscheduledOnEndedApplications(t *testing.T) {
 		}
 	}
 }
+
+// 重复连接走的是 save 的更新分支——那条路和插入分支是分开写的
+// （两个方言的 upsert 语法对不上，只能先 UPDATE 再 INSERT），
+// 漏掉的话第二次连接会撞主键，用户表现为「连过一次之后再也连不上」。
+func TestReconnectGoogleOverwritesCredentials(t *testing.T) {
+	r, _ := setupGoogle(t)
+
+	_, body := do(t, r, http.MethodGet, "/api/google/status", nil)
+	first := body["status"].(map[string]any)["account"].(map[string]any)["connected_at"]
+
+	connectGoogle(t, r)
+
+	_, body = do(t, r, http.MethodGet, "/api/google/status", nil)
+	status := body["status"].(map[string]any)
+	if status["connected"] != true {
+		t.Fatalf("重连后应当仍是已连接：%v", status)
+	}
+	// connected_at 记的是「第一次连上的时间」，更新分支不该动它。
+	if got := status["account"].(map[string]any)["connected_at"]; got != first {
+		t.Fatalf("connected_at 被重连改写了：%v -> %v", first, got)
+	}
+}

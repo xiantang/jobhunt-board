@@ -4,7 +4,7 @@
 
 看板的列就是面试阶段——`HR screen / 在线测评 / 一面 / 二面 / 三面 / 四面 / HRBP 面 / Offer 审批中`，终点是 `已发 Offer` 或 `已结束`。**这些阶段全部可以在页面上自由增删、改名、调序**，不是写死的枚举。每张卡片是一次投递（公司 + 岗位），卡片下挂着每一轮面试的独立记录：面试时间、时长、线上会议链接或线下地点、面试官、结果与评价。
 
-单一 Go 服务，前后端不分离：同一个进程既渲染看板页面（SSR 首屏），也提供 JSON 接口供页面交互使用。数据落在 SQLite 文件里，刷新页面和重启服务后都还在。
+单一 Go 服务，前后端不分离：同一个进程既渲染看板页面（SSR 首屏），也提供 JSON 接口供页面交互使用。数据本地落在 SQLite 文件里、线上落在 MySQL 上，刷新页面和重启服务后都还在。
 
 ## 快速开始
 
@@ -14,6 +14,25 @@ open http://localhost:8080     # 自动跳转到 /boards/JOBHUNT
 ```
 
 可选参数：`-addr :8080`、`-db data/app.db`、`-mode debug|release`。
+
+本地不需要装数据库，默认就是那个 SQLite 文件。**配了 `MYSQL_DSN` 就改连 MySQL**——
+线上（k3s）走的正是这条路：
+
+```bash
+MYSQL_DSN='user:pass@tcp(127.0.0.1:3306)/jobhunt' go run ./cmd/server
+```
+
+两个方言共用同一套业务 SQL，只有建表语句和连接参数分开
+（`internal/platform/db/`）。跑得起来不代表两边都跑得起来，所以整个测试套件
+可以在 MySQL 上再跑一遍：
+
+```bash
+docker run -d --name mysql-test -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_DATABASE=jobhunt -p 13306:3306 mysql:8.4
+TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:13306)/jobhunt' go test ./...
+```
+
+每个用例会在那个实例上建一个随机名字的空库，跑完删掉，互不干扰。
 
 密钥写在 `.env`（不进版本库）里的话，用 `./run.sh` 启动会自动加载；
 `./run.sh --watch` 走 air 热重载，改 Go / 模板 / 静态文件自动重编重启。
@@ -56,7 +75,7 @@ go vet ./... && go test ./...
 | 项 | 选择 | 理由 |
 |---|---|---|
 | HTTP 框架 | `github.com/gin-gonic/gin` | 路由分组、参数绑定、中间件齐全 |
-| 数据库 | SQLite（`modernc.org/sqlite`，纯 Go 驱动） | 单文件持久化，无需 cgo，无需外部服务 |
+| 数据库 | 本地 SQLite（`modernc.org/sqlite`）/ 线上 MySQL（`go-sql-driver/mysql`） | 本地零依赖单文件，线上换成托管实例后集群里不再有状态；两个驱动都是纯 Go，镜像仍是 `CGO_ENABLED=0` 的 distroless 静态二进制 |
 | 模板 / 静态资源 | `html/template` + `go:embed` | 编译成单个二进制，模板自带 XSS 转义 |
 | 前端 | 原生 JS + CSS，无框架无打包 | 前后端不分离，不引入 Node 构建链 |
 | 测试 | 标准库 `testing` + `httptest` | 无第三方断言库 |
@@ -79,7 +98,7 @@ internal/stage/             阶段模块：面试阶段的增删改序，workflo
 internal/member/            成员模块：成员列表、新增成员、解析「当前用户」
 internal/application/       面试流程模块：投递创建/维护、跟进人、阶段流转、面试轮次、操作日志
 internal/workflow/          流程模块：阶段类型 + 流转规则校验（纯函数，不碰数据库）
-internal/platform/sqlitedb/ 连接、PRAGMA、建表迁移、一次性数据修补、种子数据
+internal/platform/db/       连接（SQLite / MySQL 两套）、建表迁移、一次性数据修补、种子数据
 internal/platform/apperr/   领域错误类型（错误码 / HTTP 状态 / 中文提示 / 字段）
 internal/platform/ginx/     统一错误处理中间件、响应封装、当前用户中间件
 internal/platform/ordering/ 列内浮点位置计算，卡片与阶段列共用
@@ -302,7 +321,7 @@ access token 过期时自动用 refresh token 换新的并落库。授权时带
 - 顶部进展摘要：推进中 / Offer / 已结束 / 近 7 天面试场次 + 已出结果占比进度条
 - 流转规则限制（见上）
 - 操作日志：创建、指定跟进人、信息修改、阶段流转、排期变更，倒序展示
-- 自动化测试：日程页脚本用最小 DOM 桩实跑一遍（页面脚本抛运行时错误会让整页空白，而接口测试照样全绿）、`ingest` 的匹配与时间解析单测（注入假模型，不打真网络）、`workflow` 规则表驱动测试、`stage` 与 `application` 基于真实 SQLite 的集成测试、`api` 层用 httptest 跑完整业务流程与各类错误分支
+- 自动化测试：日程页脚本用最小 DOM 桩实跑一遍（页面脚本抛运行时错误会让整页空白，而接口测试照样全绿）、`ingest` 的匹配与时间解析单测（注入假模型，不打真网络）、`workflow` 规则表驱动测试、`stage` 与 `application` 基于真实数据库的集成测试（默认 SQLite，配上 `TEST_MYSQL_DSN` 就在 MySQL 上再跑一遍）、`api` 层用 httptest 跑完整业务流程与各类错误分支
 
 ## 关键取舍
 
@@ -311,7 +330,7 @@ access token 过期时自动用 refresh token 换新的并落库。授权时带
 - **AI 录入不自动落库**：解析和确认拆成两个接口，多一次点击，换来「模型出错不会污染看板」。也没做「自动定时扫邮箱」——那要接 IMAP / OAuth，超出本轮范围，粘贴已经覆盖主要场景。
 - **AI 只做抽取，不做决策**：阶段是它从给定列表里选的，选错了界面上改一下就行；流转合不合法仍由 `workflow` 判定，模型说了不算。
 - **日历只推不拉**：Google 那边改了时间不会回流到看板。双向同步要存 etag、处理冲突、加轮询或 webhook，复杂度翻倍，而看板本来就是事实源。日程页把两边并排显示，已经能看出「日历上被人改了」。
-- **日程同步是尽力而为，不进事务**：SQLite 事务包不住外部 HTTP 调用。宁可出现「看板存了、日历没同步」并把原因显式告诉用户，也不要为了原子性把排期回滚掉。
+- **日程同步是尽力而为，不进事务**：数据库事务包不住外部 HTTP 调用。宁可出现「看板存了、日历没同步」并把原因显式告诉用户，也不要为了原子性把排期回滚掉。
 - **不做登录鉴权**：用 cookie 表达「当前是谁」。
 - **单看板为主**：数据模型和路由都按多看板设计（`/boards/:key`），但没做看板管理页面，首页直接跳转到默认看板。
 - **无并发冲突处理**：两人同时编辑同一条流程是后写覆盖先写。后续可用 `updated_at` 做乐观锁。
@@ -330,7 +349,7 @@ access token 过期时自动用 refresh token 换新的并落库。授权时带
 - 代码生成：按「数据层 → 公共能力 → 流程模块 → 业务模块 → 接口层 → 页面层 → 测试」的顺序分步生成，每步都编译验证。
 - 验证：AI 生成代码后，通过实际启动服务 + curl 走完整流程（含各类错误分支）核对行为，再补自动化测试固化。
 
-判断与决策由人来做：技术栈（gin + SQLite、前后端不分离）、阶段配置的粒度、流转规则、模块边界、哪些扩展要做，都是先定方向再让 AI 落地，生成结果逐段检查而不是照单全收。
+判断与决策由人来做：技术栈（gin + SQLite/MySQL、前后端不分离）、阶段配置的粒度、流转规则、模块边界、哪些扩展要做，都是先定方向再让 AI 落地，生成结果逐段检查而不是照单全收。
 
 ## 部署
 
@@ -340,8 +359,8 @@ access token 过期时自动用 refresh token 换新的并落库。授权时带
 的 `appVersion` → ArgoCD 同步上线。**发布闸口是 appVersion 而不是 push 本身**，
 所以「代码进了主干」和「线上换了版本」之间隔着一次构建成功。
 
-镜像是 26MB 的 distroless 静态二进制（`CGO_ENABLED=0`，得益于 SQLite 驱动选了
-纯 Go 的 modernc），数据库落在 PVC 上。看板本身没有登录功能，公网入口前面挂了
+镜像是 26MB 的 distroless 静态二进制（`CGO_ENABLED=0`，两个数据库驱动都是纯 Go 的），
+数据落在外部 MySQL 上，集群里没有有状态资源。看板本身没有登录功能，公网入口前面挂了
 一层 Traefik BasicAuth。
 
 密钥、口令、备份、排障等**不在 git 里的手动步骤**，见 [`k8s/README.md`](k8s/README.md)。

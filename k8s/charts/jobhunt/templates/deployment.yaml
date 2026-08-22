@@ -7,15 +7,10 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
 
-  # ⚠️ 必须是 Recreate,不能用默认的 RollingUpdate。
-  #
-  # 滚动更新会在杀掉旧 Pod 之前先起新 Pod,而这两个 Pod 会同时挂载同一块
-  # RWO 卷、同时打开同一个 SQLite 文件。轻则新 Pod 卡在 ContainerCreating
-  # （卷被占着挂不上）,重则两个进程同时写，数据库损坏。
-  #
-  # 代价是发布期间有几秒不可用。对一个自己用的看板，这个代价可以忽略。
+  # 数据搬到外部 MySQL 之后，两个 Pod 短暂共存不再有「同时写一个文件」
+  # 的问题，滚动更新是安全的，发布也就不用停机了。
   strategy:
-    type: Recreate
+    type: RollingUpdate
 
   selector:
     matchLabels:
@@ -32,8 +27,6 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
-        # 卷里的文件属主设成这个 GID,否则 nonroot 写不进 PVC。
-        fsGroup: 65532
       containers:
         - name: jobhunt
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -41,13 +34,21 @@ spec:
           args:
             - -addr
             - ":{{ .Values.containerPort }}"
-            - -db
-            - "{{ .Values.persistence.mountPath }}/app.db"
           ports:
             - name: http
               containerPort: {{ .Values.containerPort }}
 
-          # 密钥来源。optional: true 让「还没建这个 Secret」不至于挡住启动 ——
+          # 数据库连接串。没有它就没有线上数据，所以【不是】 optional:
+          # Secret 缺失时 Pod 停在 CreateContainerConfigError,而不是
+          # 悄悄退回容器内的 SQLite 文件。
+          env:
+            - name: MYSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.secretName }}
+                  key: {{ .Values.mysql.secretKey }}
+
+          # 其余密钥。optional: true 让「还没建这个 Secret」不至于挡住启动 ——
           # 应用本来就支持不配密钥运行（少两个功能入口）。
           envFrom:
             - secretRef:
@@ -60,14 +61,12 @@ spec:
               drop: ["ALL"]
             # 根文件系统只读。镜像是 distroless（没有 shell、没有包管理器）,
             # 再加上只读根，攻击者即使拿到执行权也没地方落文件。
-            # 唯一需要写的地方是 /data(PVC)和 /tmp（下面挂了 emptyDir）。
+            # 唯一需要写的地方是 /tmp（下面挂了 emptyDir）。
             readOnlyRootFilesystem: true
 
           volumeMounts:
-            - name: data
-              mountPath: {{ .Values.persistence.mountPath }}
-            # SQLite 在某些操作（排序、VACUUM）下会写临时文件。根文件系统只读，
-            # 所以必须给它一个可写的 /tmp,否则那些操作会在运行时报 disk I/O error。
+            # Go 运行时和 TLS 握手偶尔要落临时文件，根文件系统只读，
+            # 得给它一个可写的 /tmp。
             - name: tmp
               mountPath: /tmp
 
@@ -88,13 +87,5 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
 
       volumes:
-        - name: data
-          {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "jobhunt.fullname" . }}-data
-          {{- else }}
-          # 关掉持久化只该用于临时验证：Pod 一重建数据就没了。
-          emptyDir: {}
-          {{- end }}
         - name: tmp
           emptyDir: {}

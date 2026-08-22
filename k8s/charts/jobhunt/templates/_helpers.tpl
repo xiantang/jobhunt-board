@@ -24,3 +24,25 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
+
+{{/*
+MySQL 的 selector labels。刻意【不】复用上面那组：
+Deployment 和 Service 的 selector 就是那组 name+instance,MySQL 的 Pod
+要是也带着它，应用的 Service 会把请求轮到数据库 Pod 上（8080 端口没人听），
+Deployment 也会把它当成自己多出来的副本。所以 name 换成 <chart>-mysql,
+两边从标签层面就不相交。
+*/}}
+{{- define "jobhunt.mysqlSelectorLabels" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}-mysql
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{/*
+MySQL 的完整 label 集。
+*/}}
+{{- define "jobhunt.mysqlLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{ include "jobhunt.mysqlSelectorLabels" . }}
+app.kubernetes.io/component: mysql
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}

@@ -1,4 +1,4 @@
-package sqlitedb
+package db
 
 import (
 	"database/sql"
@@ -37,7 +37,7 @@ func TestMigrateAddsSkippableToOldDB(t *testing.T) {
 
 	// Open 内部会跑 Migrate。跑两次验证幂等。
 	for i := 0; i < 2; i++ {
-		db, err = Open(path)
+		db, err = openSQLite(path)
 		if err != nil {
 			t.Fatalf("第 %d 次迁移失败: %v", i+1, err)
 		}
@@ -69,7 +69,7 @@ func TestMigrateBackfillsSkippableDefaults(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "old.db")
 			seedLegacyStages(t, path, tc.withCol)
 
-			db, err := Open(path)
+			db, err := openSQLite(path)
 			if err != nil {
 				t.Fatalf("迁移失败: %v", err)
 			}
@@ -87,7 +87,7 @@ func TestMigrateBackfillsSkippableDefaults(t *testing.T) {
 			if _, err := db.Exec(`UPDATE stages SET skippable = 0 WHERE key = 'online_test'`); err != nil {
 				t.Fatalf("取消勾选失败: %v", err)
 			}
-			if err := Migrate(db); err != nil {
+			if err := migrateSQLite(db); err != nil {
 				t.Fatalf("二次迁移失败: %v", err)
 			}
 			if got := skippableOf(t, db, "online_test"); got != 0 {
@@ -179,7 +179,7 @@ func TestMigrateCollapsesSeedMembers(t *testing.T) {
 
 	t.Run("不是种子成员就不动", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "custom.db")
-		db, err := Open(path)
+		db, err := openSQLite(path)
 		if err != nil {
 			t.Fatalf("建库失败: %v", err)
 		}
@@ -190,7 +190,7 @@ func TestMigrateCollapsesSeedMembers(t *testing.T) {
 				t.Fatalf("写入成员失败: %v", err)
 			}
 		}
-		if err := Migrate(db); err != nil {
+		if err := migrateSQLite(db); err != nil {
 			t.Fatalf("迁移失败: %v", err)
 		}
 		names := memberNames(t, db)
@@ -210,7 +210,7 @@ func openWithSeedMembers(t *testing.T, ownerOfApp int64) *sql.DB {
 	if err != nil {
 		t.Fatalf("打开旧库失败: %v", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schemaSQLite); err != nil {
 		t.Fatalf("建表失败: %v", err)
 	}
 	for _, n := range []string{"A", "B", "C"} {
@@ -232,7 +232,7 @@ func openWithSeedMembers(t *testing.T, ownerOfApp int64) *sql.DB {
 	}
 	db.Close()
 
-	db, err = Open(path)
+	db, err = openSQLite(path)
 	if err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestMigrateAllowsTaskKindOnOldDB(t *testing.T) {
 
 	// 跑两次，验证幂等：重建过的库第二次不该再重建，也不该报错。
 	for i := 0; i < 2; i++ {
-		db, err = Open(path)
+		db, err = openSQLite(path)
 		if err != nil {
 			t.Fatalf("第 %d 次迁移失败: %v", i+1, err)
 		}

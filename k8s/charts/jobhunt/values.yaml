@@ -1,10 +1,7 @@
 # 这是唯一「给使用者改」的文件，templates/ 里的是实现细节。
 
-# ⚠️ 固定为 1,不要调大。
-#
-# 数据库是单文件 SQLite,放在一块 ReadWriteOnce 的 PVC 上。多个副本
-# 同时写同一个文件 = 数据损坏;而 RWO 卷本身也不允许被两个节点挂载。
-# 想要多副本，前提是先换掉存储层(Postgres),不是改这个数字。
+# 数据在外部 MySQL 上，Pod 本身没有状态，调大是安全的。
+# 保持 1 只是因为这是一个人用的看板，一个 Pod 绰绰有余。
 replicaCount: 1
 
 image:
@@ -64,19 +61,50 @@ basicAuth:
 # 表现成 Pod 起不来。
 secretName: jobhunt-secrets
 
-# 数据卷：SQLite 文件落在这。Pod 重建、节点重启之后数据都还在。
-persistence:
-  enabled: true
-  # 留空用集群默认 StorageClass。k3s 默认是 local-path。
+# ── 数据库 ──────────────────────────────────────────────────────────
+#
+# 线上跑 MySQL,连接串从下面这个 Secret 的 dsn 键注入成 MYSQL_DSN。
+# 本地开发不配这个环境变量，应用会退回 SQLite 文件（见 cmd/server/main.go）。
+#
+# 这个 Secret【不在 git 里】,要手动建，见 k8s/README.md：
+#   kubectl create secret generic jobhunt-mysql \
+#     --from-literal=dsn='user:pass@tcp(mysql.internal:3306)/jobhunt'
+#
+# 它【不是】optional 的：Secret 不存在时 Pod 起不来。这是故意的 ——
+# 要是让它可选，缺 DSN 的 Pod 会安静地退回 SQLite,把数据写进容器的临时
+# 文件系统，重启就没，而且一切看起来都正常。宁可起不来。
+mysql:
+  secretName: jobhunt-mysql
+  secretKey: dsn
+
+  # 集群里自带的那个 MySQL 实例（StatefulSet + PVC + ClusterIP Service）。
   #
-  # ⚠️ local-path 的含义：数据实际存在【那台节点】的本地磁盘上
-  #    (/var/lib/rancher/k3s/storage/...)。单节点集群这没问题，
-  #    但它不是备份 —— EC2 的根卷 delete_on_termination = true,
-  #    机器一旦 terminate,这块数据跟着消失。备份见 k8s/README.md。
-  storageClass: ""
-  size: 1Gi
-  accessMode: ReadWriteOnce
-  mountPath: /data
+  # 它和上面的 secretName 是两件事：这里配的是【怎么把库跑起来】，
+  # 上面配的是【应用拿什么连接串去连】。两个 Secret 也分开：
+  #   jobhunt-mysql-auth  给 MySQL 自己 —— root 口令、应用账号和口令
+  #   jobhunt-mysql       给应用 —— 一整条 DSN
+  # 分开是因为泄露面不同：应用只该知道自己那条 DSN,不该拿到 root。
+  #
+  # enabled: false 就是回到「连外部实例」，只留上面那条 DSN。
+  internal:
+    enabled: true
+    image: mysql:8.4
+    database: jobhunt
+    secretName: jobhunt-mysql-auth
+    # 留空用集群默认 StorageClass。k3s 默认是 local-path
+    # —— 数据落在【那台节点】的本地磁盘，不是备份，见 k8s/README.md。
+    storageClass: ""
+    size: 5Gi
+    # 这台机器还跑着 k3s 和博客，别让 InnoDB 把内存吃光。
+    bufferPoolSize: 128M
+    resources:
+      requests:
+        cpu: 50m
+        memory: 384Mi
+      limits:
+        # MySQL 超内存会被 OOMKill,而不是像 CPU 那样降速，
+        # 所以这个上限要留够余量：缓冲池 128M + 连接和线程的开销。
+        memory: 768Mi
 
 resources:
   requests:

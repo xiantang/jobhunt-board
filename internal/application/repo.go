@@ -21,7 +21,7 @@ type repo struct {
 // 连 stages 拿到当前阶段的展示名与类型，连 members 拿到跟进人，
 // 再用一个子查询挑出「下一场待进行的面试」——已排期的优先，未排期的排在后面。
 const selectApplication = `
-SELECT a.id, a.board_id, a.seq, b.key, a.company, a.role, a.channel, a.notes,
+SELECT a.id, a.board_id, a.seq, b."key", a.company, a.role, a.channel, a.notes,
        a.stage_key, COALESCE(st.label, a.stage_key), COALESCE(st.kind, 'normal'),
        a.intent, a.owner_id, m.name, m.color, a.position, a.created_at, a.updated_at,
        (SELECT COUNT(*) FROM interview_rounds cr WHERE cr.application_id = a.id),
@@ -29,7 +29,7 @@ SELECT a.id, a.board_id, a.seq, b.key, a.company, a.role, a.channel, a.notes,
        nr.meeting_url, nr.meeting_place, nr.interviewer, nr.result, nr.notes
 FROM applications a
 JOIN boards b ON b.id = a.board_id
-LEFT JOIN stages st ON st.board_id = a.board_id AND st.key = a.stage_key
+LEFT JOIN stages st ON st.board_id = a.board_id AND st."key" = a.stage_key
 LEFT JOIN members m ON m.id = a.owner_id
 LEFT JOIN interview_rounds nr ON nr.id = (
     SELECT r2.id FROM interview_rounds r2
@@ -151,19 +151,21 @@ func (r *repo) get(ctx context.Context, id int64) (Application, error) {
 }
 
 // findDuplicate 查同一看板里公司 + 岗位都相同的另一张卡片，返回它的卡片编号。
-// excludeID 用来在改名时排除自己。用 NOCASE 比较，免得
+// excludeID 用来在改名时排除自己。忽略大小写比较，免得
 // 「ByteDance」和「bytedance」被当成两家公司各占一张卡。
+// 用 LOWER() 而不是 COLLATE NOCASE：后者是 SQLite 独有的排序规则名，
+// MySQL 不认。两边都走不了索引，但这张表就几十行，不值得为它建函数索引。
 func (r *repo) findDuplicate(ctx context.Context, boardID int64, company, role string, excludeID int64) (string, bool, error) {
 	var (
 		boardKey string
 		seq      int
 	)
 	err := r.db.QueryRowContext(ctx, `
-		SELECT b.key, a.seq FROM applications a
+		SELECT b."key", a.seq FROM applications a
 		JOIN boards b ON b.id = a.board_id
 		WHERE a.board_id = ? AND a.id <> ?
-		  AND a.company = ? COLLATE NOCASE
-		  AND a.role = ? COLLATE NOCASE
+		  AND LOWER(a.company) = LOWER(?)
+		  AND LOWER(a.role) = LOWER(?)
 		ORDER BY a.id LIMIT 1`, boardID, excludeID, company, role).Scan(&boardKey, &seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
@@ -381,7 +383,7 @@ func normalizeText(field, raw string, max int) (string, error) {
 // 阶段可能已经被删掉（历史轮次还在），所以 stages 用 LEFT JOIN，
 // 拿不到配色就退回灰色，而不是让整条记录消失。
 const selectScheduled = `
-SELECT r.id, r.application_id, b.key, a.seq, a.company, a.role,
+SELECT r.id, r.application_id, b."key", a.seq, a.company, a.role,
        r.stage_key, r.stage_label, COALESCE(s.color, '#6b7280'), r.kind,
        r.scheduled_at, r.duration_min, r.mode, r.meeting_url, r.meeting_place,
        r.interviewer, r.result, r.notes, r.google_event_id
@@ -454,7 +456,7 @@ func (r *repo) upcomingRounds(ctx context.Context, from, to time.Time) ([]Schedu
 // 宁可多显示一条，也不要把还要跟的面试藏起来。
 func (r *repo) unscheduledRounds(ctx context.Context) ([]ScheduledRound, error) {
 	return r.scheduledRounds(ctx, `
-		LEFT JOIN stages cur ON cur.board_id = a.board_id AND cur.key = a.stage_key
+		LEFT JOIN stages cur ON cur.board_id = a.board_id AND cur."key" = a.stage_key
 		WHERE r.scheduled_at IS NULL AND r.result = 'pending'
 		  AND (cur.kind IS NULL OR cur.kind NOT IN (?, ?))
 		ORDER BY a.updated_at DESC`,

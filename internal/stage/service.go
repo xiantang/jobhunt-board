@@ -22,7 +22,7 @@ type Service struct {
 func NewService(db *sql.DB) *Service { return &Service{db: db} }
 
 const selectStage = `
-SELECT id, board_id, key, label, kind, color, requires_owner, skippable, position
+SELECT id, board_id, "key", label, kind, color, requires_owner, skippable, position
 FROM stages`
 
 func scanStage(sc interface{ Scan(...any) error }) (Stage, error) {
@@ -135,7 +135,7 @@ func (s *Service) Create(ctx context.Context, boardID int64, in CreateInput) (St
 	key := uniqueKey(slug(label), existing)
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO stages (board_id, key, label, kind, color, requires_owner, skippable, position, created_at)
+		INSERT INTO stages (board_id, "key", label, kind, color, requires_owner, skippable, position, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		boardID, key, label, string(kind), color, boolToInt(in.RequiresOwner), boolToInt(in.Skippable),
 		ordering.At(positions, index), now)

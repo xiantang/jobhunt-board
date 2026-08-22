@@ -4,12 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"interview/internal/platform/apperr"
-	"interview/internal/platform/sqlitedb"
+	"interview/internal/platform/db/dbtest"
 	"interview/internal/workflow"
 )
 
@@ -17,19 +16,15 @@ import (
 func setup(t *testing.T) (*Service, *sql.DB, int64) {
 	t.Helper()
 
-	db, err := sqlitedb.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("打开测试库失败: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	conn := dbtest.New(t)
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := db.Exec(`INSERT INTO boards (key, name, description, created_at) VALUES ('T', '测试看板', '', ?)`, now)
+	res, err := conn.Exec(`INSERT INTO boards ("key", name, description, created_at) VALUES ('T', '测试看板', '', ?)`, now)
 	if err != nil {
 		t.Fatalf("写入测试看板失败: %v", err)
 	}
 	boardID, _ := res.LastInsertId()
-	return NewService(db), db, boardID
+	return NewService(conn), conn, boardID
 }
 
 // seedStages 写入一套最小可用的阶段：两个普通阶段 + 两个终态。
