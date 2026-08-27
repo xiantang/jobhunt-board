@@ -19,7 +19,11 @@ type repo struct {
 
 // selectApplication 统一的查询投影：
 // 连 stages 拿到当前阶段的展示名与类型，连 members 拿到跟进人，
-// 再用一个子查询挑出「下一场待进行的面试」——已排期的优先，未排期的排在后面。
+// 再用一个子查询挑出卡片上要展示的那一轮。
+//
+// 挑的是「还没有定论的一轮」：待进行的，或者已经面完在等结果的。
+// 待进行的排在前面——那是还要动手的事；等结果的只是留着让卡片有话可说，
+// 不该把一场约好的面试从卡片上挤掉。同一档里已排期的优先，未排期的殿后。
 const selectApplication = `
 SELECT a.id, a.board_id, a.seq, b."key", a.company, a.role, a.channel, a.notes,
        a.stage_key, COALESCE(st.label, a.stage_key), COALESCE(st.kind, 'normal'),
@@ -33,8 +37,8 @@ LEFT JOIN stages st ON st.board_id = a.board_id AND st."key" = a.stage_key
 LEFT JOIN members m ON m.id = a.owner_id
 LEFT JOIN interview_rounds nr ON nr.id = (
     SELECT r2.id FROM interview_rounds r2
-    WHERE r2.application_id = a.id AND r2.result = 'pending'
-    ORDER BY (r2.scheduled_at IS NULL), r2.scheduled_at, r2.id
+    WHERE r2.application_id = a.id AND r2.result IN ('pending', 'awaiting')
+    ORDER BY (r2.result <> 'pending'), (r2.scheduled_at IS NULL), r2.scheduled_at, r2.id
     LIMIT 1
 )`
 
@@ -114,7 +118,8 @@ func (r *repo) list(ctx context.Context, boardID int64, f Filter) ([]Application
 		args = append(args, *f.StageKey)
 	}
 	if f.Upcoming {
-		query += ` AND nr.id IS NOT NULL AND nr.scheduled_at IS NOT NULL`
+		// 「只看已排期」问的是还有面试要去，等结果的那些不算。
+		query += ` AND nr.id IS NOT NULL AND nr.scheduled_at IS NOT NULL AND nr.result = 'pending'`
 	}
 	query += ` ORDER BY a.position, a.id`
 

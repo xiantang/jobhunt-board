@@ -82,9 +82,9 @@
           <p class="card__sub">{{ .Role }}{{ if and .Role .Channel }} · {{ end }}{{ .Channel }}</p>
           {{ end }}
           {{ with .NextRound }}
-          <p class="card__round{{ if .Overdue }} card__round--overdue{{ end }}">
-            <span>📅 {{ .WhenText }}</span>
-            <span class="card__meeting">{{ .MeetingText }}</span>
+          <p class="card__round{{ if .Overdue }} card__round--overdue{{ end }}{{ if .Awaiting }} card__round--awaiting{{ end }}">
+            <span>{{ if .Awaiting }}⏳{{ else }}📅{{ end }} {{ .WhenText }}</span>
+            <span class="card__meeting">{{ if .Awaiting }}等结果{{ else }}{{ .MeetingText }}{{ end }}</span>
           </p>
           {{ end }}
           <div class="card__meta">

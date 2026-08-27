@@ -356,3 +356,69 @@ func TestFilterByStageAndOwner(t *testing.T) {
 		t.Fatalf("还没有排期，期望 0 条，实际 %d", len(upcoming))
 	}
 }
+
+// 面完了在等结果：卡片上还看得见这一轮，但它不再算「还有事要做」——
+// 既不催去约时间，也不算逾期，「只看已排期」里也不该出现。
+func TestAwaitingResultLeavesTheQueue(t *testing.T) {
+	svc, boardID, members := setup(t)
+	ctx := context.Background()
+	app := mustCreate(t, svc, boardID, CreateInput{Company: "某公司", OwnerID: &members[0]})
+	if _, err := svc.Move(ctx, app.ID, "online_test", -1, 0); err != nil {
+		t.Fatalf("推进失败: %v", err)
+	}
+	if _, err := svc.Move(ctx, app.ID, "round_1", -1, 0); err != nil {
+		t.Fatalf("推进失败: %v", err)
+	}
+
+	past := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	detail, err := svc.GetDetail(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("读取详情失败: %v", err)
+	}
+	roundID := detail.Rounds[0].ID
+	if _, err := svc.UpdateRound(ctx, roundID, RoundUpdateInput{ScheduledAt: &past}, 0); err != nil {
+		t.Fatalf("排期失败: %v", err)
+	}
+
+	// 时间过了、结果还挂着「待进行」——这才是要催的状态。
+	overdue, _ := svc.Get(ctx, app.ID)
+	if overdue.NextRound == nil || !overdue.NextRound.Overdue() {
+		t.Fatalf("面试时间已过却没标成逾期：%+v", overdue.NextRound)
+	}
+
+	awaiting := ResultAwaiting
+	updated, err := svc.UpdateRound(ctx, roundID, RoundUpdateInput{Result: &awaiting}, 0)
+	if err != nil {
+		t.Fatalf("标记等结果失败: %v", err)
+	}
+	if !updated.Awaiting() || updated.Overdue() {
+		t.Fatalf("标记等结果后 = %+v", updated)
+	}
+
+	after, _ := svc.Get(ctx, app.ID)
+	if after.NextRound == nil || after.NextRound.ID != roundID {
+		t.Fatalf("等结果的那一轮应当还留在卡片上：%+v", after.NextRound)
+	}
+	if after.NeedsSchedule() {
+		t.Fatal("面都面完了，不该再催去安排时间")
+	}
+
+	upcoming, err := svc.List(ctx, boardID, Filter{Upcoming: true})
+	if err != nil {
+		t.Fatalf("按排期筛选失败: %v", err)
+	}
+	if len(upcoming) != 0 {
+		t.Fatalf("等结果的不算「已排期」，期望 0 条，实际 %d", len(upcoming))
+	}
+
+	// 又约上了下一场：卡片要让位给还没进行的那一场。
+	next := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	fresh, err := svc.ScheduleRound(ctx, app.ID, RoundInput{ScheduledAt: &next}, 0)
+	if err != nil {
+		t.Fatalf("安排下一场失败: %v", err)
+	}
+	reloaded, _ := svc.Get(ctx, app.ID)
+	if reloaded.NextRound == nil || reloaded.NextRound.ID != fresh.ID {
+		t.Fatalf("卡片上应当是新约的那一场：%+v", reloaded.NextRound)
+	}
+}

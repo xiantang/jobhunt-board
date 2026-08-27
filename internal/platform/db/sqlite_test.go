@@ -344,3 +344,98 @@ func TestMigrateAllowsTaskKindOnOldDB(t *testing.T) {
 		db.Close()
 	}
 }
+
+// TestMigrateAllowsAwaitingResultOnOldDB 模拟一个 result 的 CHECK 里还没有
+// 'awaiting' 的旧库：SQLite 改不了 CHECK，得靠迁移把 interview_rounds 整张重建。
+func TestMigrateAllowsAwaitingResultOnOldDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-result.db")
+
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("打开旧库失败: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE applications (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			board_id   INTEGER NOT NULL,
+			seq        INTEGER NOT NULL,
+			company    TEXT    NOT NULL,
+			role       TEXT    NOT NULL DEFAULT '',
+			channel    TEXT    NOT NULL DEFAULT '',
+			notes      TEXT    NOT NULL DEFAULT '',
+			stage_key  TEXT    NOT NULL,
+			intent     TEXT    NOT NULL DEFAULT 'normal',
+			owner_id   INTEGER,
+			position   REAL    NOT NULL,
+			created_at TEXT    NOT NULL,
+			updated_at TEXT    NOT NULL
+		);
+		CREATE TABLE interview_rounds (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+			stage_key      TEXT    NOT NULL,
+			stage_label    TEXT    NOT NULL,
+			scheduled_at   TEXT,
+			duration_min   INTEGER NOT NULL DEFAULT 60,
+			mode           TEXT    NOT NULL DEFAULT 'online' CHECK (mode IN ('online', 'onsite', 'phone')),
+			meeting_url    TEXT    NOT NULL DEFAULT '',
+			meeting_place  TEXT    NOT NULL DEFAULT '',
+			interviewer    TEXT    NOT NULL DEFAULT '',
+			result         TEXT    NOT NULL DEFAULT 'pending'
+			               CHECK (result IN ('pending', 'passed', 'failed', 'cancelled')),
+			notes          TEXT    NOT NULL DEFAULT '',
+			created_at     TEXT    NOT NULL,
+			updated_at     TEXT    NOT NULL
+		);
+		INSERT INTO applications (id, board_id, seq, company, stage_key, position, created_at, updated_at)
+			VALUES (1, 1, 1, '某公司', 'round_1', 1000, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		INSERT INTO interview_rounds (id, application_id, stage_key, stage_label, scheduled_at, result, notes, created_at, updated_at)
+			VALUES (1, 1, 'round_1', '一面', '2026-01-02T02:00:00Z', 'pending', '手写代码', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("造旧库失败: %v", err)
+	}
+	db.Close()
+
+	// 跑两次，验证幂等：重建过的库第二次不该再重建，也不该报错。
+	for i := 0; i < 2; i++ {
+		db, err = openSQLite(path)
+		if err != nil {
+			t.Fatalf("第 %d 次迁移失败: %v", i+1, err)
+		}
+
+		// 数据连同后来补的列一起活下来。
+		var notes, kind string
+		if err := db.QueryRow(
+			`SELECT notes, kind FROM interview_rounds WHERE id = 1`).Scan(&notes, &kind); err != nil {
+			t.Fatalf("第 %d 次读轮次失败: %v", i+1, err)
+		}
+		if notes != "手写代码" || kind != "interview" {
+			t.Fatalf("重建后 notes = %q，kind = %q——数据在重建时丢了", notes, kind)
+		}
+
+		// 重建之后 CHECK 该放行 awaiting，别的乱值仍然要挡住。
+		if _, err := db.Exec(`UPDATE interview_rounds SET result = 'awaiting' WHERE id = 1`); err != nil {
+			t.Fatalf("第 %d 次写入 awaiting 失败: %v", i+1, err)
+		}
+		if _, err := db.Exec(`UPDATE interview_rounds SET result = 'nonsense' WHERE id = 1`); err == nil {
+			t.Fatal("CHECK 约束没了：乱写的 result 也能存进去")
+		}
+		if _, err := db.Exec(`UPDATE interview_rounds SET result = 'pending' WHERE id = 1`); err != nil {
+			t.Fatalf("复原 result 失败: %v", err)
+		}
+
+		// 外键还连着：删掉流程要能级联清掉它的轮次。
+		if i == 1 {
+			if _, err := db.Exec(`DELETE FROM applications WHERE id = 1`); err != nil {
+				t.Fatalf("删除流程失败: %v", err)
+			}
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM interview_rounds`).Scan(&count); err != nil {
+				t.Fatalf("统计轮次失败: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("级联删除没生效，还剩 %d 条轮次", count)
+			}
+		}
+		db.Close()
+	}
+}

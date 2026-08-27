@@ -769,10 +769,10 @@ func normalizeResult(raw string) (string, error) {
 	switch raw {
 	case "":
 		return ResultPending, nil
-	case ResultPending, ResultPassed, ResultFailed, ResultCancelled:
+	case ResultPending, ResultAwaiting, ResultPassed, ResultFailed, ResultCancelled:
 		return raw, nil
 	default:
-		return "", apperr.Invalid("result", "面试结果只能是 pending、passed、failed 或 cancelled")
+		return "", apperr.Invalid("result", "面试结果只能是 pending、awaiting、passed、failed 或 cancelled")
 	}
 }
 

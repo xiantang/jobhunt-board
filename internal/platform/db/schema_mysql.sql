@@ -102,8 +102,11 @@ CREATE TABLE IF NOT EXISTS interview_rounds (
     meeting_url     VARCHAR(1000) NOT NULL DEFAULT '',
     meeting_place   VARCHAR(500)  NOT NULL DEFAULT '',
     interviewer     VARCHAR(191)  NOT NULL DEFAULT '',
+    -- result: awaiting 是「面试已经结束、结果还没下来」的等待期，
+    --         既不用再催时间，也还没有定论
     result          VARCHAR(16)   NOT NULL DEFAULT 'pending'
-                    CHECK (result IN ('pending', 'passed', 'failed', 'cancelled')),
+                    CONSTRAINT chk_rounds_result
+                    CHECK (result IN ('pending', 'awaiting', 'passed', 'failed', 'cancelled')),
     notes           VARCHAR(4000) NOT NULL DEFAULT '',
     -- google_event_id: 这一轮在 Google 日历上对应的事件，空表示还没同步过
     google_event_id VARCHAR(191)  NOT NULL DEFAULT '',

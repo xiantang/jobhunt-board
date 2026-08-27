@@ -64,6 +64,9 @@ func migrateSQLite(db *sql.DB) error {
 	if err := once(db, "stage_kind_task", allowTaskKind); err != nil {
 		return err
 	}
+	if err := once(db, "round_result_awaiting", allowAwaitingResult); err != nil {
+		return err
+	}
 	if err := once(db, "skippable_defaults", backfillSkippable); err != nil {
 		return err
 	}
@@ -212,6 +215,81 @@ func backfillTaskStages(db *sql.DB) error {
 		UPDATE interview_rounds SET kind = 'task'
 		WHERE stage_key IN (SELECT key FROM stages WHERE kind = 'task')`); err != nil {
 		return fmt.Errorf("回填任务记录的 kind 失败: %w", err)
+	}
+	return nil
+}
+
+// allowAwaitingResult 让旧库的 interview_rounds 接受新的 'awaiting' 结果。
+//
+// 和 stages 那次一样：CHECK 约束改不了，只能按官方推荐的流程重建整张表。
+// 这张表是被引用方（没有别的表指向它），但它自己指向 applications，
+// 所以同样要先关外键，再在事务里重建。
+func allowAwaitingResult(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'interview_rounds'`).Scan(&ddl); err != nil {
+		return fmt.Errorf("读取 interview_rounds 表结构失败: %w", err)
+	}
+	if strings.Contains(ddl, "'awaiting'") { // 新建的库本来就带上了
+		return nil
+	}
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = off`); err != nil {
+		return fmt.Errorf("重建 interview_rounds 前关闭外键失败: %w", err)
+	}
+	defer db.Exec(`PRAGMA foreign_keys = on`)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("重建 interview_rounds 开启事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		CREATE TABLE rounds_rebuild (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+			stage_key      TEXT    NOT NULL,
+			stage_label    TEXT    NOT NULL,
+			kind           TEXT    NOT NULL DEFAULT 'interview'
+			               CHECK (kind IN ('interview', 'task')),
+			scheduled_at   TEXT,
+			duration_min   INTEGER NOT NULL DEFAULT 60,
+			mode           TEXT    NOT NULL DEFAULT 'online' CHECK (mode IN ('online', 'onsite', 'phone')),
+			meeting_url    TEXT    NOT NULL DEFAULT '',
+			meeting_place  TEXT    NOT NULL DEFAULT '',
+			interviewer    TEXT    NOT NULL DEFAULT '',
+			result         TEXT    NOT NULL DEFAULT 'pending'
+			               CHECK (result IN ('pending', 'awaiting', 'passed', 'failed', 'cancelled')),
+			notes          TEXT    NOT NULL DEFAULT '',
+			google_event_id TEXT   NOT NULL DEFAULT '',
+			created_at     TEXT    NOT NULL,
+			updated_at     TEXT    NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("建 interview_rounds 新表失败: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO rounds_rebuild (id, application_id, stage_key, stage_label, kind, scheduled_at, duration_min,
+		                            mode, meeting_url, meeting_place, interviewer, result, notes,
+		                            google_event_id, created_at, updated_at)
+		SELECT id, application_id, stage_key, stage_label, kind, scheduled_at, duration_min,
+		       mode, meeting_url, meeting_place, interviewer, result, notes,
+		       google_event_id, created_at, updated_at FROM interview_rounds`); err != nil {
+		return fmt.Errorf("迁移 interview_rounds 数据失败: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE interview_rounds`); err != nil {
+		return fmt.Errorf("删除 interview_rounds 旧表失败: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE rounds_rebuild RENAME TO interview_rounds`); err != nil {
+		return fmt.Errorf("重命名 interview_rounds 新表失败: %w", err)
+	}
+	// 索引跟着旧表一起没了，得重新建。
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_rounds_app ON interview_rounds (application_id, scheduled_at)`); err != nil {
+		return fmt.Errorf("重建 interview_rounds 索引失败: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("重建 interview_rounds 提交失败: %w", err)
 	}
 	return nil
 }
