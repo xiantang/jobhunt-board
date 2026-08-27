@@ -500,7 +500,7 @@ type RoundReq struct {
 	MeetingURL   *string `json:"meeting_url"   binding:"omitempty,max=300"`
 	MeetingPlace *string `json:"meeting_place" binding:"omitempty,max=120"`
 	Interviewer  *string `json:"interviewer"   binding:"omitempty,max=60"`
-	Result       *string `json:"result"        binding:"omitempty,oneof=pending passed failed cancelled"`
+	Result       *string `json:"result"        binding:"omitempty,oneof=pending awaiting passed failed cancelled"`
 	Notes        *string `json:"notes"         binding:"omitempty,max=2000"`
 }
 

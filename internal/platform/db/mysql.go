@@ -4,6 +4,7 @@ package db
 import (
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -71,15 +72,53 @@ func openMySQL(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// migrateMySQL 执行幂等的建表语句。
+// migrateMySQL 执行幂等的建表语句，再补上建表之后才放宽的约束。
 //
-// 没有 SQLite 那边的历史补丁：那些是给早期版本留下的库打的，
-// MySQL 是从这一版才开始用的，建出来就是最终形态。
+// 建表语句是 CREATE TABLE IF NOT EXISTS：库已经建过了就整条跳过，
+// 后来改的列和约束一个都不会落到线上，所以那些得单独打补丁。
 func migrateMySQL(db *sql.DB) error {
 	for _, stmt := range splitStatements(schemaMySQL) {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("初始化表结构失败（%s）: %w", firstLine(stmt), err)
 		}
+	}
+	return allowAwaitingResultMySQL(db)
+}
+
+// allowAwaitingResultMySQL 让已经建好的库接受新的 'awaiting' 结果。
+//
+// MySQL 能直接改 CHECK，不用像 SQLite 那样重建整张表，但旧库上那条约束是
+// 匿名的（名字由 MySQL 自动生成，形如 interview_rounds_chk_3），
+// 不能按名字去猜——从 information_schema 里按「管的是 result 列、又还不认识
+// awaiting」找出来再删。新建的库带的是 chk_rounds_result，本来就认识，查不到，
+// 这一段就是个空转。
+func allowAwaitingResultMySQL(db *sql.DB) error {
+	var name string
+	err := db.QueryRow(`
+		SELECT cc.CONSTRAINT_NAME
+		FROM information_schema.CHECK_CONSTRAINTS cc
+		JOIN information_schema.TABLE_CONSTRAINTS tc
+		  ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
+		 AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+		WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+		  AND tc.TABLE_NAME = 'interview_rounds'
+		  AND cc.CHECK_CLAUSE LIKE '%result%'
+		  AND cc.CHECK_CLAUSE NOT LIKE '%awaiting%'
+		LIMIT 1`).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("查找 interview_rounds 的 result 约束失败: %w", err)
+	}
+
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE interview_rounds DROP CHECK \"%s\"", name)); err != nil {
+		return fmt.Errorf("删除旧的 result 约束 %s 失败: %w", name, err)
+	}
+	if _, err := db.Exec(`
+		ALTER TABLE interview_rounds ADD CONSTRAINT chk_rounds_result
+		CHECK (result IN ('pending', 'awaiting', 'passed', 'failed', 'cancelled'))`); err != nil {
+		return fmt.Errorf("放宽 result 约束失败: %w", err)
 	}
 	return nil
 }

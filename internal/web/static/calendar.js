@@ -19,7 +19,7 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const MODES = { online: '线上', onsite: '现场', phone: '电话' };
-  const RESULTS = { pending: '待进行', passed: '已通过', failed: '未通过', cancelled: '已取消' };
+  const RESULTS = { pending: '待进行', awaiting: '等结果', passed: '已通过', failed: '未通过', cancelled: '已取消' };
 
   // 时间小工具。这几个必须定义在下面的 `let from = thisWeekISO()` 之前——
   // const 声明有暂时性死区，函数声明虽然会提升，但它引用的 pad 不会。

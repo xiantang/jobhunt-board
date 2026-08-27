@@ -22,7 +22,8 @@
 
   const INTENT = { low: '低', normal: '中', high: '高' };
   const MODES = [['online', '线上'], ['onsite', '现场'], ['phone', '电话']];
-  const RESULTS = [['pending', '待进行'], ['passed', '已通过'], ['failed', '未通过'], ['cancelled', '已取消']];
+  const RESULTS = [['pending', '待进行'], ['awaiting', '等结果'],
+                   ['passed', '已通过'], ['failed', '未通过'], ['cancelled', '已取消']];
 
   function toStage(col) {
     return { key: col.key, label: col.label, kind: col.kind, color: col.color, id: col.id,
@@ -79,9 +80,9 @@
       : '';
 
     const round = app.next_round
-      ? `<p class="card__round${overdue(app.next_round) ? ' card__round--overdue' : ''}">
-           <span>${isTask(app.next_round) ? '⏰' : '📅'} ${esc(whenText(app.next_round.scheduled_at, isTask(app.next_round)))}</span>
-           <span class="card__meeting">${esc(meetingText(app.next_round))}</span>
+      ? `<p class="card__round${overdue(app.next_round) ? ' card__round--overdue' : ''}${awaiting(app.next_round) ? ' card__round--awaiting' : ''}">
+           <span>${awaiting(app.next_round) ? '⏳' : (isTask(app.next_round) ? '⏰' : '📅')} ${esc(whenText(app.next_round.scheduled_at, isTask(app.next_round)))}</span>
+           <span class="card__meeting">${awaiting(app.next_round) ? '等结果' : esc(meetingText(app.next_round))}</span>
          </p>`
       : '';
 
@@ -384,7 +385,7 @@
         <label>面试官<input type="text" data-field="interviewer" maxlength="60" value="${esc(r.interviewer)}"></label>
       </div>`;
 
-    return `<div class="round${task ? ' round--task' : ''}${overdue(r) ? ' round--overdue' : ''}" data-round="${r.id}">
+    return `<div class="round${task ? ' round--task' : ''}${overdue(r) ? ' round--overdue' : ''}${awaiting(r) ? ' round--awaiting' : ''}" data-round="${r.id}">
       <div class="round__head">
         <b>${task ? '⏰ ' : ''}${esc(r.stage_label)}</b>
         <select data-field="result">${options(RESULTS, r.result)}</select>
@@ -759,8 +760,13 @@
 
   const overdue = (r) => r.result === 'pending' && r.scheduled_at && new Date(r.scheduled_at) < new Date();
 
+  // 面完了在等结果：没有时间要约，也不该再算逾期。
+  const awaiting = (r) => r.result === 'awaiting';
+
   // 面试没约上、测评没填 DDL，都得催——卡片上给个提醒角标。
+  // 等结果的那条不催：事情已经做完，催也没用。
   const needsSchedule = (app) => (app.stage_kind === 'interview' || app.stage_kind === 'task') &&
+    !(app.next_round && awaiting(app.next_round)) &&
     (!app.next_round || !app.next_round.scheduled_at);
 
   const pad = (n) => String(n).padStart(2, '0');

@@ -71,8 +71,13 @@ func (a Application) IntentLabel() string {
 
 // NeedsSchedule 表示卡片停在面试 / 任务阶段，却还没定时间——界面上给个提醒。
 // 对面试是「还没约上」，对在线测评是「还不知道什么时候截止」，都得催。
+//
+// 已经面完在等结果的那条不算：事情做完了，没有时间要约，催也没用。
 func (a Application) NeedsSchedule() bool {
 	if !a.StageKind.TracksRound() {
+		return false
+	}
+	if a.NextRound != nil && a.NextRound.Awaiting() {
 		return false
 	}
 	return a.NextRound == nil || a.NextRound.ScheduledAt == nil
@@ -143,8 +148,12 @@ const (
 )
 
 // 面试结果取值。
+//
+// awaiting 是「面试已经结束、结果还没下来」这段真空期：面完到通知之间常常要等
+// 几天甚至一两周，这期间它既不该再催人去约时间，也不该被当成还没进行的面试。
 const (
 	ResultPending   = "pending"
+	ResultAwaiting  = "awaiting"
 	ResultPassed    = "passed"
 	ResultFailed    = "failed"
 	ResultCancelled = "cancelled"
@@ -154,6 +163,7 @@ var modeLabels = map[string]string{ModeOnline: "线上", ModeOnsite: "现场", M
 
 var resultLabels = map[string]string{
 	ResultPending:   "待进行",
+	ResultAwaiting:  "等结果",
 	ResultPassed:    "已通过",
 	ResultFailed:    "未通过",
 	ResultCancelled: "已取消",
@@ -164,6 +174,12 @@ func (r Round) ModeLabel() string { return labelOr(modeLabels, r.Mode) }
 
 // ResultLabel 返回面试结果中文名。
 func (r Round) ResultLabel() string { return labelOr(resultLabels, r.Result) }
+
+// Awaiting 表示这一轮已经结束，正在等结果。
+func (r Round) Awaiting() bool { return r.Result == ResultAwaiting }
+
+// Awaiting 同上，日程页用。
+func (r ScheduledRound) Awaiting() bool { return r.Result == ResultAwaiting }
 
 // Scheduled 表示这一轮已经定下时间。
 func (r Round) Scheduled() bool { return r.ScheduledAt != nil }
