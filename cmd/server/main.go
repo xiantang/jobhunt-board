@@ -52,12 +52,6 @@ func main() {
 		logger.Error("写入种子数据失败", "error", err)
 		os.Exit(1)
 	}
-	// 「等待回复中」是后来加的默认列。Seed 只管空库，已经在用的看板得单独补，
-	// 否则新增的默认阶段永远到不了真正需要它的人手里。幂等，每次启动跑一遍。
-	if err := db.EnsureWaitingStage(conn); err != nil {
-		logger.Error("补「等待回复中」列失败", "error", err)
-		os.Exit(1)
-	}
 
 	// AI 录入靠环境变量开关：没配 OPENAI_API_KEY 就只是少一个入口，服务照常起。
 	model := ai.New(ai.ConfigFromEnv())

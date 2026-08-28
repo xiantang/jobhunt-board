@@ -27,8 +27,7 @@
 
   function toStage(col) {
     return { key: col.key, label: col.label, kind: col.kind, color: col.color, id: col.id,
-             requires_owner: col.requires_owner, skippable: col.skippable,
-             terminal: col.terminal, unordered: col.unordered };
+             requires_owner: col.requires_owner, skippable: col.skippable, terminal: col.terminal };
   }
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -43,8 +42,7 @@
     const from = STAGES[stageIndex(fromKey)];
     const to = STAGES[stageIndex(toKey)];
     if (!from || !to) return false;
-    // 不占顺序的列（终态、等待回复）随时可进可出，不用算中间隔了几列。
-    if (to.unordered || from.unordered) return true;
+    if (to.terminal || from.terminal) return true;
     // 相邻当然可以；跨得更远则要求中间隔着的列全部「可跳过」。
     const [lo, hi] = [stageIndex(fromKey), stageIndex(toKey)].sort((a, b) => a - b);
     for (let i = lo + 1; i < hi; i += 1) {

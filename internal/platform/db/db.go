@@ -54,10 +54,6 @@ var defaultStages = []struct {
 	{"round_1", "一面", "interview", "#2563eb", true, false},
 	{"round_2", "二面", "interview", "#4f46e5", false, false},
 	{"round_3", "三面", "interview", "#7c3aed", false, false},
-	// 一面、二面、三面面完都可能卡在等通知，所以它是「等待回复」类型：
-	// 摆在三面旁边只是个位置，任意阶段都能进出它（workflow.Kind.Unordered）。
-	// 可跳过，否则它会挡住三面直接推进到四面。
-	{"waiting_reply", "等待回复中", "waiting", "#ca8a04", false, true},
 	{"round_4", "四面", "interview", "#a21caf", false, true},
 	{"hrbp", "HRBP 面", "interview", "#db2777", false, true},
 	{"offer_wait", "Offer 审批中", "normal", "#d97706", false, false},
@@ -65,7 +61,7 @@ var defaultStages = []struct {
 	{"rejected", "已结束", "terminal_fail", "#6b7280", false, false},
 }
 
-// Seed 仅在库为空时写入演示数据：一个看板、十一个阶段、三名成员、五条面试流程。
+// Seed 仅在库为空时写入演示数据：一个看板、十个阶段、三名成员、五条面试流程。
 func Seed(db *sql.DB) error {
 	var boards int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM boards`).Scan(&boards); err != nil {
@@ -173,135 +169,4 @@ func Seed(db *sql.DB) error {
 	}
 
 	return tx.Commit()
-}
-
-// waitingStage 是「等待回复中」那一列在 defaultStages 里的定义。
-// EnsureWaitingStage 给老看板补列时用的是同一份，两处不会写岔；
-// 按 key 找而不是按下标，往 defaultStages 中间插一列不会把它指飞。
-var waitingStage = func() struct {
-	key, label, kind, color string
-	requiresOwner           bool
-	skippable               bool
-} {
-	for _, s := range defaultStages {
-		if s.kind == "waiting" {
-			return s
-		}
-	}
-	panic("defaultStages 里没有等待回复列")
-}()
-
-// EnsureWaitingStage 给已经在用的看板补上「等待回复中」这一列。
-//
-// Seed 只在空库上跑，往 defaultStages 里加一列只对全新的库有效 —— 而这一列
-// 恰恰是给正在面的人用的，不能只让新用户享受。所以它每次启动都跑一遍：
-// 已经有等待回复类型的列就跳过，两个方言共用这一份逻辑。
-//
-// 落位规则和 defaultStages 一致：插在三面后面。看板被改造过、找不到三面时
-// 退到第一个终态之前——那是「再加一列」的通用直觉，和 stage.Create 一致。
-func EnsureWaitingStage(conn *sql.DB) error {
-	rows, err := conn.Query(`SELECT id FROM boards ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("读取看板失败: %w", err)
-	}
-	defer rows.Close()
-
-	ids := make([]int64, 0, 4)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("读取看板失败: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("读取看板失败: %w", err)
-	}
-
-	for _, id := range ids {
-		if err := ensureWaitingStageOn(conn, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ensureWaitingStageOn(conn *sql.DB, boardID int64) error {
-	type stage struct {
-		key, kind string
-		position  float64
-	}
-
-	rows, err := conn.Query(
-		`SELECT "key", kind, position FROM stages WHERE board_id = ? ORDER BY position, id`, boardID)
-	if err != nil {
-		return fmt.Errorf("读取看板 %d 的阶段失败: %w", boardID, err)
-	}
-	defer rows.Close()
-
-	stages := make([]stage, 0, 12)
-	for rows.Next() {
-		var st stage
-		if err := rows.Scan(&st.key, &st.kind, &st.position); err != nil {
-			return fmt.Errorf("读取看板 %d 的阶段失败: %w", boardID, err)
-		}
-		stages = append(stages, st)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("读取看板 %d 的阶段失败: %w", boardID, err)
-	}
-	if len(stages) == 0 { // 空看板交给 Seed，这里不插一列孤零零的
-		return nil
-	}
-	for _, st := range stages {
-		// 已经有一列在干这件事了就别再插一列——不管它是我们插的，
-		// 还是用户自己建的、改了名的。
-		if st.key == waitingStage.key || st.kind == "waiting" {
-			return nil
-		}
-	}
-
-	// 落点：三面后面；没有三面就退到第一个终态之前；连终态都没有就追加到末尾。
-	anchor := -1
-	for i, st := range stages {
-		if st.key == "round_3" {
-			anchor = i
-			break
-		}
-	}
-	var before, after float64
-	switch {
-	case anchor >= 0:
-		before = stages[anchor].position
-		after = before + 2000
-		if anchor+1 < len(stages) {
-			after = stages[anchor+1].position
-		}
-	default:
-		first := len(stages)
-		for i, st := range stages {
-			if st.kind == "terminal_success" || st.kind == "terminal_fail" {
-				first = i
-				break
-			}
-		}
-		after = stages[len(stages)-1].position + 2000
-		if first < len(stages) {
-			after = stages[first].position
-		}
-		before = after - 2000
-		if first > 0 {
-			before = stages[first-1].position
-		}
-	}
-
-	_, err = conn.Exec(`
-		INSERT INTO stages (board_id, "key", label, kind, color, requires_owner, skippable, position, created_at)
-		VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
-		boardID, waitingStage.key, waitingStage.label, waitingStage.kind, waitingStage.color,
-		(before+after)/2, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("给看板 %d 补「%s」列失败: %w", boardID, waitingStage.label, err)
-	}
-	return nil
 }

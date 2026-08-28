@@ -23,10 +23,8 @@ CREATE TABLE IF NOT EXISTS stages (
     key            TEXT    NOT NULL,
     label          TEXT    NOT NULL,
     -- task: 任务阶段（在线测评这类），移进来挂一条只有 DDL 和链接的记录
-    -- waiting: 等待回复列（面完了在等通知）。它不参与列顺序，任意阶段都能进出
     kind           TEXT    NOT NULL DEFAULT 'normal'
-                   CHECK (kind IN ('normal', 'interview', 'task', 'waiting',
-                                   'terminal_success', 'terminal_fail')),
+                   CHECK (kind IN ('normal', 'interview', 'task', 'terminal_success', 'terminal_fail')),
     color          TEXT    NOT NULL DEFAULT '#6b7280',
     requires_owner INTEGER NOT NULL DEFAULT 0,
     -- skippable: 这一列允许被跨过去。中间隔着的列全部可跳过时，才准跨阶段流转。
