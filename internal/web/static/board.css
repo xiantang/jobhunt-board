@@ -110,6 +110,11 @@ body {
   border-radius: 8px;
   padding: 10px;
 }
+/* 等待回复列不在流程顺序里，虚线边框把它和「第 N 轮」那几列区分开。 */
+.column--waiting {
+  background: color-mix(in srgb, #ca8a04 7%, var(--bg));
+  border: 1px dashed color-mix(in srgb, #ca8a04 45%, transparent);
+}
 .column--terminal_success { background: color-mix(in srgb, #16a34a 8%, var(--bg)); }
 .column--terminal_fail { background: color-mix(in srgb, var(--muted) 12%, var(--bg)); }
 .column__head { display: flex; align-items: center; gap: 8px; padding: 2px 4px 10px; }

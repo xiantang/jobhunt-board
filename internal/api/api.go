@@ -79,18 +79,21 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 // BoardColumn 是看板的一列，等价于一个阶段。
 type BoardColumn struct {
-	ID            int64                     `json:"id"`
-	Key           string                    `json:"key"`
-	Label         string                    `json:"label"`
-	Kind          workflow.Kind             `json:"kind"`
-	KindLabel     string                    `json:"kind_label"`
-	Color         string                    `json:"color"`
-	RequiresOwner bool                      `json:"requires_owner"`
-	Skippable     bool                      `json:"skippable"` // 可以被跨过去
-	IsEntry       bool                      `json:"is_entry"`  // 第一列，新流程从这里进
-	Terminal      bool                      `json:"terminal"`
-	Count         int                       `json:"count"`
-	Applications  []application.Application `json:"applications"`
+	ID            int64         `json:"id"`
+	Key           string        `json:"key"`
+	Label         string        `json:"label"`
+	Kind          workflow.Kind `json:"kind"`
+	KindLabel     string        `json:"kind_label"`
+	Color         string        `json:"color"`
+	RequiresOwner bool          `json:"requires_owner"`
+	Skippable     bool          `json:"skippable"` // 可以被跨过去
+	IsEntry       bool          `json:"is_entry"`  // 第一列，新流程从这里进
+	Terminal      bool          `json:"terminal"`
+	// Unordered: 这一列不参与列顺序（终态、等待回复），任意阶段可进可出。
+	// 前端的 canMove 是后端规则的镜像，得知道这件事才能把选项置灰得一致。
+	Unordered    bool                      `json:"unordered"`
+	Count        int                       `json:"count"`
+	Applications []application.Application `json:"applications"`
 }
 
 // BoardView 是看板页面/接口共用的视图数据。
@@ -135,6 +138,7 @@ func (h *Handler) Board(c *gin.Context, key string, f application.Filter) (Board
 			Skippable:     st.Skippable,
 			IsEntry:       i == 0,
 			Terminal:      st.Kind.Terminal(),
+			Unordered:     st.Kind.Unordered(),
 			Applications:  []application.Application{},
 		}
 		for _, a := range items {
@@ -223,7 +227,7 @@ func (h *Handler) ListStages(c *gin.Context) {
 // CreateStageReq 是新增阶段的请求体。
 type CreateStageReq struct {
 	Label         string `json:"label"          binding:"required,max=20"`
-	Kind          string `json:"kind"           binding:"omitempty,oneof=normal interview terminal_success terminal_fail"`
+	Kind          string `json:"kind"           binding:"omitempty,oneof=normal interview task waiting terminal_success terminal_fail"`
 	Color         string `json:"color"          binding:"omitempty,max=20"`
 	RequiresOwner bool   `json:"requires_owner"`
 	Skippable     bool   `json:"skippable"`
@@ -264,7 +268,7 @@ func (h *Handler) CreateStage(c *gin.Context) {
 // UpdateStageReq 是修改阶段的请求体，字段为空表示不改。
 type UpdateStageReq struct {
 	Label         *string `json:"label"          binding:"omitempty,max=20"`
-	Kind          *string `json:"kind"           binding:"omitempty,oneof=normal interview terminal_success terminal_fail"`
+	Kind          *string `json:"kind"           binding:"omitempty,oneof=normal interview task waiting terminal_success terminal_fail"`
 	Color         *string `json:"color"          binding:"omitempty,max=20"`
 	RequiresOwner *bool   `json:"requires_owner"`
 	Skippable     *bool   `json:"skippable"`

@@ -349,7 +349,8 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput, actorID 
 }
 
 // Move 把流程推进到另一个阶段（拖拽与按钮共用）。index >= 0 时同时决定列内位置。
-// 目标是面试阶段且还没有对应的待进行记录时，顺手建一条「待安排」，提醒去填时间。
+// 目标是面试阶段且还没有对应的待进行记录时，顺手建一条「待安排」，提醒去填时间；
+// 目标是「等待回复」列时反过来，把刚离开的那一轮收尾成「等结果」。
 func (s *Service) Move(ctx context.Context, id int64, toKey string, index int, actorID int64) (Application, error) {
 	current, err := s.repo.get(ctx, id)
 	if err != nil {
@@ -392,6 +393,25 @@ func (s *Service) Move(ctx context.Context, id int64, toKey string, index int, a
 		if err := insertEvent(ctx, tx, id, actorID, EventStageChanged, from.Key, to.Key,
 			"将阶段从「"+from.Label+"」推进到「"+to.Label+"」"); err != nil {
 			return Application{}, apperr.Internal(err)
+		}
+		// 挪进「等待回复中」= 那一轮面试已经发生完了，只是通知还没来。
+		// 把来源阶段还挂着的那条待进行记录标成「等结果」：卡片不再催排期、
+		// 不再标红逾期，日程页也不会继续列着它。这正是这一列存在的意义——
+		// 只挪卡片而把记录留在「待进行」，等于把面完的事一直挂在待办里。
+		if to.Kind == workflow.KindWaiting && from.Kind.TracksRound() {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE interview_rounds SET result = ?, updated_at = ?
+				WHERE application_id = ? AND stage_key = ? AND result = ?`,
+				ResultAwaiting, time.Now().UTC().Format(time.RFC3339), id, from.Key, ResultPending)
+			if err != nil {
+				return Application{}, apperr.Internal(err)
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				if err := insertEvent(ctx, tx, id, actorID, EventRoundUpdated, "", "",
+					"把「"+from.Label+"」记为等结果"); err != nil {
+					return Application{}, apperr.Internal(err)
+				}
+			}
 		}
 		if to.Kind.TracksRound() {
 			var pending int
