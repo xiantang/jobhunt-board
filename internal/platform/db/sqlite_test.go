@@ -322,9 +322,12 @@ func TestMigrateAllowsTaskKindOnOldDB(t *testing.T) {
 			t.Fatalf("一面的 kind 被改成了 %q", interview)
 		}
 
-		// 重建之后 CHECK 该放行 task，别的乱值仍然要挡住。
+		// 重建之后 CHECK 该放行 task 和 waiting，别的乱值仍然要挡住。
 		if _, err := db.Exec(`UPDATE stages SET kind = 'task' WHERE key = 'hr_screen'`); err != nil {
 			t.Fatalf("第 %d 次写入 task 类型失败: %v", i+1, err)
+		}
+		if _, err := db.Exec(`UPDATE stages SET kind = 'waiting' WHERE key = 'hr_screen'`); err != nil {
+			t.Fatalf("第 %d 次写入 waiting 类型失败: %v", i+1, err)
 		}
 		if _, err := db.Exec(`UPDATE stages SET kind = 'nonsense' WHERE key = 'hr_screen'`); err == nil {
 			t.Fatal("CHECK 约束没了：乱写的 kind 也能存进去")
@@ -437,5 +440,87 @@ func TestMigrateAllowsAwaitingResultOnOldDB(t *testing.T) {
 			}
 		}
 		db.Close()
+	}
+}
+
+// TestEnsureWaitingStageBackfill 覆盖「等待回复中」这一列的补列逻辑：
+// Seed 只管空库，已经在用的看板得靠 EnsureWaitingStage 补上。
+func TestEnsureWaitingStageBackfill(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backfill.db")
+	conn, err := openSQLite(path)
+	if err != nil {
+		t.Fatalf("建库失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 造一个「新增这一列之前」的看板：默认十列，没有等待回复。
+	now := "2026-01-01T00:00:00Z"
+	res, err := conn.Exec(
+		`INSERT INTO boards ("key", name, description, created_at) VALUES ('OLD', '老看板', '', ?)`, now)
+	if err != nil {
+		t.Fatalf("写入看板失败: %v", err)
+	}
+	boardID, _ := res.LastInsertId()
+	for i, s := range defaultStages {
+		if s.kind == "waiting" {
+			continue
+		}
+		if _, err := conn.Exec(`
+			INSERT INTO stages (board_id, "key", label, kind, color, requires_owner, skippable, position, created_at)
+			VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+			boardID, s.key, s.label, s.kind, s.color, float64((i+1)*1000), now); err != nil {
+			t.Fatalf("写入阶段失败: %v", err)
+		}
+	}
+
+	// 跑两次，验证幂等。
+	for i := 0; i < 2; i++ {
+		if err := EnsureWaitingStage(conn); err != nil {
+			t.Fatalf("第 %d 次补列失败: %v", i+1, err)
+		}
+		var count int
+		if err := conn.QueryRow(
+			`SELECT COUNT(*) FROM stages WHERE board_id = ? AND kind = 'waiting'`, boardID).Scan(&count); err != nil {
+			t.Fatalf("统计等待回复列失败: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("第 %d 次之后等待回复列有 %d 个，期望 1", i+1, count)
+		}
+	}
+
+	// 落位：夹在三面和四面之间。
+	var prev, waiting, next float64
+	q := `SELECT position FROM stages WHERE board_id = ? AND "key" = ?`
+	for key, dst := range map[string]*float64{"round_3": &prev, "waiting_reply": &waiting, "round_4": &next} {
+		if err := conn.QueryRow(q, boardID, key).Scan(dst); err != nil {
+			t.Fatalf("读 %s 的位置失败: %v", key, err)
+		}
+	}
+	if !(prev < waiting && waiting < next) {
+		t.Fatalf("落位不对：三面 %v，等待回复 %v，四面 %v", prev, waiting, next)
+	}
+
+	// 用户自己建过一列等待回复类型的，就别再插一列。
+	res, err = conn.Exec(
+		`INSERT INTO boards ("key", name, description, created_at) VALUES ('OWN', '自建看板', '', ?)`, now)
+	if err != nil {
+		t.Fatalf("写入看板失败: %v", err)
+	}
+	ownID, _ := res.LastInsertId()
+	if _, err := conn.Exec(`
+		INSERT INTO stages (board_id, "key", label, kind, color, requires_owner, skippable, position, created_at)
+		VALUES (?, 'my_wait', '等 HR 消息', 'waiting', '#888888', 0, 1, 1000, ?)`, ownID, now); err != nil {
+		t.Fatalf("写入自建阶段失败: %v", err)
+	}
+	if err := EnsureWaitingStage(conn); err != nil {
+		t.Fatalf("补列失败: %v", err)
+	}
+	var own int
+	if err := conn.QueryRow(
+		`SELECT COUNT(*) FROM stages WHERE board_id = ? AND kind = 'waiting'`, ownID).Scan(&own); err != nil {
+		t.Fatalf("统计失败: %v", err)
+	}
+	if own != 1 {
+		t.Fatalf("自建看板上的等待回复列有 %d 个，不该再补一列", own)
 	}
 }

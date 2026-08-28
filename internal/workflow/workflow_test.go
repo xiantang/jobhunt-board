@@ -164,3 +164,61 @@ func TestEntryOnEmptyFlow(t *testing.T) {
 		t.Fatal("没有阶段时 Entry 应当报错")
 	}
 }
+
+// waitingFlow 是真实看板的形状：三面后面挂着一列「等待回复中」。
+// 它摆在那儿只是位置——一面、二面、三面面完都可能卡在等通知。
+func waitingFlow() Flow {
+	return NewFlow([]Stage{
+		{Key: "round_1", Label: "一面", Kind: KindInterview},
+		{Key: "round_2", Label: "二面", Kind: KindInterview},
+		{Key: "round_3", Label: "三面", Kind: KindInterview},
+		{Key: "waiting_reply", Label: "等待回复中", Kind: KindWaiting, Skippable: true},
+		{Key: "round_4", Label: "四面", Kind: KindInterview},
+		{Key: "rejected", Label: "已结束", Kind: KindRejected},
+	})
+}
+
+func TestWaitingStageIgnoresColumnOrder(t *testing.T) {
+	flow := waitingFlow()
+
+	cases := []struct {
+		name     string
+		from, to string
+		want     bool
+	}{
+		// 这一条是这一列存在的理由：一面和它之间隔着二面、三面两列不可跳过的，
+		// 按顺序规则会被拒，而一面面完在等通知是最常见的情形。
+		{"一面直接进等待回复", "round_1", "waiting_reply", true},
+		{"二面直接进等待回复", "round_2", "waiting_reply", true},
+		{"三面进等待回复", "round_3", "waiting_reply", true},
+		{"等回复之后去二面", "waiting_reply", "round_2", true},
+		{"等回复之后去四面", "waiting_reply", "round_4", true},
+		{"等回复之后被挂", "waiting_reply", "rejected", true},
+		// 它可跳过，所以照样挡不住三面直接推进到四面。
+		{"它不挡住正常推进", "round_3", "round_4", true},
+		// 其余规则不受影响：一面还是不能直接跳到三面。
+		{"普通跨列仍然被拒", "round_1", "round_3", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			from, _ := flow.Parse(tc.from)
+			to, _ := flow.Parse(tc.to)
+			if got := flow.Can(from, to); got != tc.want {
+				t.Fatalf("Can(%s → %s) = %v，期望 %v", tc.from, tc.to, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWaitingKindIsNotTerminal(t *testing.T) {
+	if KindWaiting.Terminal() {
+		t.Fatal("等待回复不是终态：流程还在继续，只是在等通知")
+	}
+	if !KindWaiting.Unordered() {
+		t.Fatal("等待回复应当不参与列顺序")
+	}
+	if KindWaiting.TracksRound() {
+		t.Fatal("等待回复列不该自动挂一条待办——要做的事在上一列已经做完了")
+	}
+}

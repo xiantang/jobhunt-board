@@ -67,6 +67,9 @@ func migrateSQLite(db *sql.DB) error {
 	if err := once(db, "round_result_awaiting", allowAwaitingResult); err != nil {
 		return err
 	}
+	if err := once(db, "stage_kind_waiting", allowWaitingKind); err != nil {
+		return err
+	}
 	if err := once(db, "skippable_defaults", backfillSkippable); err != nil {
 		return err
 	}
@@ -135,7 +138,50 @@ func once(db *sql.DB, id string, fn func(*sql.DB) error) error {
 	return nil
 }
 
+// stageKinds 是 stages.kind 当前允许的取值，重建表时写进 CHECK。
+// 和 schema_sqlite.sql 里那份保持一致——两边都是 workflow.Kinds() 的映射。
+const stageKinds = `'normal', 'interview', 'task', 'waiting', 'terminal_success', 'terminal_fail'`
+
 // allowTaskKind 让旧库的 stages 接受新的 'task' 类型，并把「在线测评」转过去。
+func allowTaskKind(db *sql.DB) error {
+	has, err := stagesCheckHas(db, "'task'")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if err := rebuildStages(db); err != nil {
+			return err
+		}
+	}
+	return backfillTaskStages(db)
+}
+
+// allowWaitingKind 让旧库的 stages 接受 'waiting'（等待回复列）。
+//
+// allowTaskKind 那次重建写进去的已经是最新的 kind 列表，所以先建的库
+// 走到这里通常什么都不用做；只有正好停在中间那个版本的库才会真的重建。
+func allowWaitingKind(db *sql.DB) error {
+	has, err := stagesCheckHas(db, "'waiting'")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	return rebuildStages(db)
+}
+
+// stagesCheckHas 判断 stages 的建表语句里是否已经带上了某个 kind 取值。
+func stagesCheckHas(db *sql.DB, needle string) (bool, error) {
+	var ddl string
+	if err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'stages'`).Scan(&ddl); err != nil {
+		return false, fmt.Errorf("读取 stages 表结构失败: %w", err)
+	}
+	return strings.Contains(ddl, needle), nil
+}
+
+// rebuildStages 用最新的 kind CHECK 重建 stages 表。
 //
 // kind 上有一条 CHECK 约束，而 SQLite 改不了 CHECK——只能按官方推荐的
 // 12 步流程重建表。整个过程包在事务里，中途失败会整体回滚，
@@ -144,16 +190,7 @@ func once(db *sql.DB, id string, fn func(*sql.DB) error) error {
 // 期间必须关掉外键：applications 通过 (board_id, key) 指向 stages，
 // 开着外键 DROP 掉父表会被拒绝。PRAGMA foreign_keys 又不能在事务里改，
 // 所以顺序是「关外键 → 事务重建 → 开外键」。
-func allowTaskKind(db *sql.DB) error {
-	var ddl string
-	if err := db.QueryRow(
-		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'stages'`).Scan(&ddl); err != nil {
-		return fmt.Errorf("读取 stages 表结构失败: %w", err)
-	}
-	if strings.Contains(ddl, "'task'") { // 新建的库本来就带上了，不用重建
-		return backfillTaskStages(db)
-	}
-
+func rebuildStages(db *sql.DB) error {
 	if _, err := db.Exec(`PRAGMA foreign_keys = off`); err != nil {
 		return fmt.Errorf("重建 stages 前关闭外键失败: %w", err)
 	}
@@ -172,7 +209,7 @@ func allowTaskKind(db *sql.DB) error {
 			key            TEXT    NOT NULL,
 			label          TEXT    NOT NULL,
 			kind           TEXT    NOT NULL DEFAULT 'normal'
-			               CHECK (kind IN ('normal', 'interview', 'task', 'terminal_success', 'terminal_fail')),
+			               CHECK (kind IN (` + stageKinds + `)),
 			color          TEXT    NOT NULL DEFAULT '#6b7280',
 			requires_owner INTEGER NOT NULL DEFAULT 0,
 			skippable      INTEGER NOT NULL DEFAULT 0,
@@ -200,7 +237,7 @@ func allowTaskKind(db *sql.DB) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("重建 stages 提交失败: %w", err)
 	}
-	return backfillTaskStages(db)
+	return nil
 }
 
 // backfillTaskStages 把旧库里的「在线测评」转成任务阶段，并给它下面已有的

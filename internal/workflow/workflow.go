@@ -18,17 +18,21 @@ const (
 	KindNormal    Kind = "normal"           // 普通阶段，如 HR screen、Offer 审批中
 	KindInterview Kind = "interview"        // 面试阶段，移入时自动建一条待安排的面试轮次
 	KindTask      Kind = "task"             // 任务阶段，如在线测评：不约时间，只有截止时间和链接
+	KindWaiting   Kind = "waiting"          // 等待回复：面完了在等通知，任意阶段可进可出
 	KindOffer     Kind = "terminal_success" // 终态：拿到 Offer
 	KindRejected  Kind = "terminal_fail"    // 终态：挂了 / 主动结束
 )
 
 // Kinds 按看板顺序返回全部阶段类型，供配置界面渲染下拉。
-func Kinds() []Kind { return []Kind{KindNormal, KindInterview, KindTask, KindOffer, KindRejected} }
+func Kinds() []Kind {
+	return []Kind{KindNormal, KindInterview, KindTask, KindWaiting, KindOffer, KindRejected}
+}
 
 var kindLabels = map[Kind]string{
 	KindNormal:    "普通阶段",
 	KindInterview: "面试阶段",
 	KindTask:      "任务阶段 · 带 DDL",
+	KindWaiting:   "等待回复 · 不占顺序",
 	KindOffer:     "终态 · Offer",
 	KindRejected:  "终态 · 结束",
 }
@@ -52,6 +56,15 @@ func ParseKind(raw string) (Kind, error) {
 
 // Terminal 判断是否为终态阶段（Offer 或结束）。
 func (k Kind) Terminal() bool { return k == KindOffer || k == KindRejected }
+
+// Unordered 表示这一列不参与「按列顺序推进」那套规则。
+//
+// 终态是一种：任何阶段都可能突然拿到 Offer 或被挂。
+// 「等待回复」是另一种：一面、二面、三面面完都可能卡在等通知，
+// 通知来了又可能去下一轮、也可能直接结束。它在看板上有个位置，
+// 但那只是摆放——把它当成第 N 列去算「中间隔着几列」，
+// 就会变成「二面能进它、一面不能」这种没道理的规则。
+func (k Kind) Unordered() bool { return k.Terminal() || k == KindWaiting }
 
 // TracksRound 表示移进这一列要自动挂一条待办记录。
 // 面试挂的是「待安排的面试」，任务挂的是「待定 DDL 的测评」——
@@ -117,17 +130,14 @@ func (f Flow) Parse(raw string) (Stage, error) {
 // Can 判断 from → to 是否为合法流转：
 //
 //  1. 同阶段视为合法（只是调整卡片排序）
-//  2. 任何阶段都可以直达终态——随时可能拿到 Offer 或被挂
-//  3. 终态可以退回任意非终态——用来撤销误标
-//  4. 其余按列顺序走：相邻当然可以，跨得更远则要求
+//  2. 不占顺序的列（终态、等待回复）随时可进可出，见 Kind.Unordered
+//  3. 其余按列顺序走：相邻当然可以，跨得更远则要求
 //     中间隔着的每一列都标了「可跳过」（例如这家公司没有在线测评）
 func (f Flow) Can(from, to Stage) bool {
 	switch {
 	case from.Key == to.Key:
 		return true
-	case to.Kind.Terminal():
-		return true
-	case from.Kind.Terminal():
+	case to.Kind.Unordered(), from.Kind.Unordered():
 		return true
 	default:
 		return f.betweenSkippable(from.Position, to.Position)
