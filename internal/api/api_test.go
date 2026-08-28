@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -21,17 +22,19 @@ import (
 	"interview/internal/server"
 )
 
-// setup 起一个真实的 gin 引擎 + 临时库（含种子看板与十个默认阶段）。
+// setup 起一个真实的 gin 引擎 + 临时库（含种子看板与全套默认阶段）。
 // 不注入模型，AI 录入处于关闭状态。
 func setup(t *testing.T) *gin.Engine { return setupWithModel(t, nil) }
 
 // setupWithModel 同上，但注入一个假模型，用来测 AI 录入而不打真网络。
 func setupWithModel(t *testing.T, model ai.Completer) *gin.Engine {
-	return setupWith(t, model, gcal.New(gcal.Config{}))
+	r, _ := setupWith(t, model, gcal.New(gcal.Config{}))
+	return r
 }
 
-// setupWith 起引擎并注入指定的模型与 Google 客户端。
-func setupWith(t *testing.T, model ai.Completer, google *gcal.Client) *gin.Engine {
+// setupWith 起引擎并注入指定的模型与 Google 客户端，同时把库交回调用方——
+// 少数用例（日程页）需要绕过接口把种子数据清干净，见 clearSeedRounds。
+func setupWith(t *testing.T, model ai.Completer, google *gcal.Client) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -40,7 +43,23 @@ func setupWith(t *testing.T, model ai.Completer, google *gcal.Client) *gin.Engin
 	if err := db.Seed(conn); err != nil {
 		t.Fatalf("写入种子数据失败: %v", err)
 	}
-	return server.New(conn, slog.New(slog.NewTextHandler(io.Discard, nil)), model, google)
+	return server.New(conn, slog.New(slog.NewTextHandler(io.Discard, nil)), model, google), conn
+}
+
+// clearSeedRounds 清掉种子里的示例排期。
+//
+// 那几条写的是「今天 ±2 天」，而日程页的用例是按「本周几」定位的。
+// 今天是周五时，本周三正好是今天减两天；周一则撞上加两天——示例数据于是
+// 混进断言，用例每周挂两次（2026-08-28 周五 CI 上就是这么挂的）。
+//
+// 让用例去躲开那两天治标：种子排期是给人第一次打开页面时看的，
+// 本来就不该参与断言。删掉之后日程上只剩用例自己造的东西，
+// 哪天跑都一样。
+func clearSeedRounds(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	if _, err := conn.Exec(`DELETE FROM interview_rounds`); err != nil {
+		t.Fatalf("清空种子排期失败: %v", err)
+	}
 }
 
 // do 发一个请求并返回状态码与解析后的 JSON。
