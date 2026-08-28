@@ -82,23 +82,18 @@ func migrateMySQL(db *sql.DB) error {
 			return fmt.Errorf("初始化表结构失败（%s）: %w", firstLine(stmt), err)
 		}
 	}
-	// 后来放宽的两条 CHECK。新建的库建出来就是宽的，这两段查不到东西，空转。
-	if err := relaxCheck(db, "interview_rounds", "result", "awaiting", "chk_rounds_result",
-		"result IN ('pending', 'awaiting', 'passed', 'failed', 'cancelled')"); err != nil {
-		return err
-	}
-	return relaxCheck(db, "stages", "kind", "waiting", "chk_stages_kind",
-		"kind IN ('normal', 'interview', 'task', 'waiting', 'terminal_success', 'terminal_fail')")
+	return allowAwaitingResultMySQL(db)
 }
 
-// relaxCheck 把某张表上一条【还不认识 missing 这个新取值】的 CHECK 换掉。
+// allowAwaitingResultMySQL 让已经建好的库接受新的 'awaiting' 结果。
 //
-// MySQL 能直接改 CHECK，不用像 SQLite 那样重建整张表，但旧库上那些约束是
-// 匿名的（名字由 MySQL 自动生成，形如 interview_rounds_chk_3、stages_chk_1），
-// 名字不能猜——从 information_schema 里按「管的是这一列、又还不认识新取值」
-// 找出来再删，换成一条具名的。新建的库带的就是具名那条，本来就认识，查不到。
-func relaxCheck(db *sql.DB, table, column, missing, name, clause string) error {
-	var old string
+// MySQL 能直接改 CHECK，不用像 SQLite 那样重建整张表，但旧库上那条约束是
+// 匿名的（名字由 MySQL 自动生成，形如 interview_rounds_chk_3），
+// 不能按名字去猜——从 information_schema 里按「管的是 result 列、又还不认识
+// awaiting」找出来再删。新建的库带的是 chk_rounds_result，本来就认识，查不到，
+// 这一段就是个空转。
+func allowAwaitingResultMySQL(db *sql.DB) error {
+	var name string
 	err := db.QueryRow(`
 		SELECT cc.CONSTRAINT_NAME
 		FROM information_schema.CHECK_CONSTRAINTS cc
@@ -106,23 +101,24 @@ func relaxCheck(db *sql.DB, table, column, missing, name, clause string) error {
 		  ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
 		 AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
 		WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
-		  AND tc.TABLE_NAME = ?
-		  AND cc.CHECK_CLAUSE LIKE CONCAT('%', ?, '%')
-		  AND cc.CHECK_CLAUSE NOT LIKE CONCAT('%', ?, '%')
-		LIMIT 1`, table, column, missing).Scan(&old)
+		  AND tc.TABLE_NAME = 'interview_rounds'
+		  AND cc.CHECK_CLAUSE LIKE '%result%'
+		  AND cc.CHECK_CLAUSE NOT LIKE '%awaiting%'
+		LIMIT 1`).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("查找 %s 的 %s 约束失败: %w", table, column, err)
+		return fmt.Errorf("查找 interview_rounds 的 result 约束失败: %w", err)
 	}
 
-	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s DROP CHECK \"%s\"", table, old)); err != nil {
-		return fmt.Errorf("删除 %s 上旧的 %s 约束 %s 失败: %w", table, column, old, err)
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE interview_rounds DROP CHECK \"%s\"", name)); err != nil {
+		return fmt.Errorf("删除旧的 result 约束 %s 失败: %w", name, err)
 	}
-	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s)",
-		table, name, clause)); err != nil {
-		return fmt.Errorf("放宽 %s 的 %s 约束失败: %w", table, column, err)
+	if _, err := db.Exec(`
+		ALTER TABLE interview_rounds ADD CONSTRAINT chk_rounds_result
+		CHECK (result IN ('pending', 'awaiting', 'passed', 'failed', 'cancelled'))`); err != nil {
+		return fmt.Errorf("放宽 result 约束失败: %w", err)
 	}
 	return nil
 }

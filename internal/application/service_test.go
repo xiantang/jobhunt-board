@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +55,6 @@ func seedStages(t *testing.T, db *sql.DB, boardID int64) {
 		{"hr_screen", "HR screen", string(workflow.KindNormal), 0},
 		{"online_test", "在线测评", string(workflow.KindNormal), 0},
 		{"round_1", "一面", string(workflow.KindInterview), 1},
-		{"waiting_reply", "等待回复中", string(workflow.KindWaiting), 0},
 		{"offer", "已发 Offer", string(workflow.KindOffer), 0},
 		{"rejected", "已结束", string(workflow.KindRejected), 0},
 	}
@@ -422,72 +420,5 @@ func TestAwaitingResultLeavesTheQueue(t *testing.T) {
 	reloaded, _ := svc.Get(ctx, app.ID)
 	if reloaded.NextRound == nil || reloaded.NextRound.ID != fresh.ID {
 		t.Fatalf("卡片上应当是新约的那一场：%+v", reloaded.NextRound)
-	}
-}
-
-// 挪进「等待回复中」= 那一轮面完了在等通知：记录留着，但不再是待办。
-func TestMoveIntoWaitingStageClosesRound(t *testing.T) {
-	svc, boardID, members := setup(t)
-	ctx := context.Background()
-	app := mustCreate(t, svc, boardID, CreateInput{Company: "某公司", OwnerID: &members[0]})
-	if _, err := svc.Move(ctx, app.ID, "online_test", -1, 0); err != nil {
-		t.Fatalf("推进失败: %v", err)
-	}
-	if _, err := svc.Move(ctx, app.ID, "round_1", -1, 0); err != nil {
-		t.Fatalf("推进失败: %v", err)
-	}
-
-	// 一面已经面过了，只是结果还没回填。
-	past := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
-	detail, _ := svc.GetDetail(ctx, app.ID)
-	roundID := detail.Rounds[0].ID
-	if _, err := svc.UpdateRound(ctx, roundID, RoundUpdateInput{ScheduledAt: &past}, 0); err != nil {
-		t.Fatalf("排期失败: %v", err)
-	}
-
-	moved, err := svc.Move(ctx, app.ID, "waiting_reply", -1, 0)
-	if err != nil {
-		t.Fatalf("挪进等待回复列失败: %v", err)
-	}
-
-	after, err := svc.GetDetail(ctx, app.ID)
-	if err != nil {
-		t.Fatalf("读取详情失败: %v", err)
-	}
-	if len(after.Rounds) != 1 {
-		t.Fatalf("轮次数 = %d，等待回复列不该再挂一条待办", len(after.Rounds))
-	}
-	if after.Rounds[0].Result != ResultAwaiting {
-		t.Fatalf("一面的结果 = %q，期望自动收尾成 %q", after.Rounds[0].Result, ResultAwaiting)
-	}
-	if after.Rounds[0].Overdue() {
-		t.Fatal("面完在等通知，不该再算逾期")
-	}
-	if moved.NeedsSchedule() {
-		t.Fatal("等待回复列不该催排期")
-	}
-	// 面试记录本身留着——时间、面试官、评价都还要回头看。
-	if after.Rounds[0].ScheduledAt == nil || !after.Rounds[0].ScheduledAt.Equal(past.UTC()) {
-		t.Fatalf("面试时间被动了: %+v", after.Rounds[0].ScheduledAt)
-	}
-
-	// 收尾这件事写进操作日志，不是悄悄改的。
-	found := false
-	for _, e := range after.Events {
-		if strings.Contains(e.Detail, "等结果") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("自动收尾没有留下操作日志")
-	}
-
-	// 通知来了，从这一列可以直接回到面试阶段，照常挂一条新的待安排。
-	back, err := svc.Move(ctx, app.ID, "round_1", -1, 0)
-	if err != nil {
-		t.Fatalf("从等待回复列回到一面失败: %v", err)
-	}
-	if back.RoundCount != 2 || back.NextRound == nil || back.NextRound.ScheduledAt != nil {
-		t.Fatalf("回到面试阶段应当新挂一条待安排: count=%d next=%+v", back.RoundCount, back.NextRound)
 	}
 }
