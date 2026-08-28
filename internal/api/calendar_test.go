@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -103,10 +104,25 @@ func lastSegment(path string) string {
 // setupGoogle 起一个连好 Google 的引擎。
 func setupGoogle(t *testing.T) (*gin.Engine, *googleStub) {
 	t.Helper()
-	stub := newGoogleStub(t)
-	r := setupWith(t, nil, gcal.New(gcal.Config{ClientID: "cid", ClientSecret: "secret"}))
-	connectGoogle(t, r)
+	r, stub, _ := setupGoogleDB(t)
 	return r, stub
+}
+
+// setupAgenda 同上，另外清掉种子里的示例排期。
+// 日程页的用例要数「那天有几条」，数得准的前提是那天只有它自己造的东西。
+func setupAgenda(t *testing.T) (*gin.Engine, *googleStub) {
+	t.Helper()
+	r, stub, conn := setupGoogleDB(t)
+	clearSeedRounds(t, conn)
+	return r, stub
+}
+
+func setupGoogleDB(t *testing.T) (*gin.Engine, *googleStub, *sql.DB) {
+	t.Helper()
+	stub := newGoogleStub(t)
+	r, conn := setupWith(t, nil, gcal.New(gcal.Config{ClientID: "cid", ClientSecret: "secret"}))
+	connectGoogle(t, r)
+	return r, stub, conn
 }
 
 // connectGoogle 跑一遍 OAuth 回调，把凭证写进库。
@@ -270,7 +286,7 @@ func TestCalendarFailureDoesNotBlockScheduling(t *testing.T) {
 // 日程页的核心：看板的面试和 Google 日历的会议铺在同一条时间线上，
 // 撞期要标出来。
 func TestAgendaMergesBothSources(t *testing.T) {
-	r, stub := setupGoogle(t)
+	r, stub := setupAgenda(t)
 
 	// 本周三 14:00 的面试。
 	at := thisWeekAt(3, 14)
@@ -347,7 +363,7 @@ func TestAgendaMergesBothSources(t *testing.T) {
 
 // Google 拉不回来时，看板那半边照常显示，只挂一个 warning。
 func TestAgendaSurvivesGoogleFailure(t *testing.T) {
-	r, stub := setupGoogle(t)
+	r, stub := setupAgenda(t)
 
 	at := thisWeekAt(3, 10)
 
