@@ -17,4 +17,4 @@ version: 0.1.0
 #
 # ⚠️ 首次部署前这里是占位值。得先让 CI 跑一次把它填上，否则 ArgoCD 会去拉
 #    一个不存在的 tag,Pod 卡在 ImagePullBackOff。
-appVersion: "sha-51b7dd17809302e21dd0a44431049b2061dbb393"
+appVersion: "sha-1b4bf94dd5f481671d4229969553bae6469fe795"
